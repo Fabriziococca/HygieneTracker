@@ -1,11 +1,11 @@
 {
-  "name": "Hygiene Tracker",
-  "short_name": "Higiene",
-  "description": "Seguimiento de lavado de blancos y textiles",
+  "name": "LifeCycle",
+  "short_name": "LifeCycle",
+  "description": "Control unificado de hábitos, lentes de contacto e higiene del hogar",
   "start_url": "./index.html",
   "display": "standalone",
   "background_color": "#0f172a",
-  "theme_color": "#3b82f6",
+  "theme_color": "#0f172a",
   "icons": [
     {
       "src": "icon.png",
