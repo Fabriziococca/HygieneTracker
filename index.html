@@ -209,6 +209,22 @@
 
         <!-- SECCIÓN 4: AJUSTES Y MIGRACIÓN -->
         <section id="ajustes-section" class="main-section hidden">
+            <!-- Tarjeta de Instalación PWA (oculta por defecto, se muestra si es compatible) -->
+            <div class="card backup-card hidden" id="pwa-install-card" style="margin-bottom: 2rem;">
+                <div class="card-header">
+                    <div class="icon-container">
+                        <i class="ph ph-device-mobile"></i>
+                    </div>
+                    <h3>Instalar Aplicación</h3>
+                </div>
+                <div class="card-body">
+                    <p class="backup-text">Instala LifeCycle en tu pantalla de inicio para acceder de forma rápida y disfrutar de una experiencia a pantalla completa como una app nativa.</p>
+                    <button id="btnInstallPWA" class="btn btn-primary" style="width: 100%;">
+                        <i class="ph-bold ph-plus-circle"></i> Instalar LifeCycle
+                    </button>
+                </div>
+            </div>
+
             <div class="card backup-card">
                 <div class="card-header">
                     <div class="icon-container">

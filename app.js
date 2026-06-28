@@ -1042,6 +1042,8 @@ class AppController {
         
         this.initNavigation();
         this.initModalListeners();
+        this.deferredPrompt = null;
+        this.initPWAInstall();
     }
 
     initNavigation() {
@@ -1144,6 +1146,47 @@ class AppController {
     initModalListeners() {
         this.modalCancel?.addEventListener('click', () => this.closeModal());
         this.modalSave?.addEventListener('click', () => this.saveModalDate());
+    }
+
+    initPWAInstall() {
+        const installCard = document.getElementById('pwa-install-card');
+        const btnInstall = document.getElementById('btnInstallPWA');
+
+        window.addEventListener('beforeinstallprompt', (e) => {
+            // Prevent the mini-infobar from appearing on mobile
+            e.preventDefault();
+            // Stash the event so it can be triggered later.
+            this.deferredPrompt = e;
+            // Show the install card
+            if (installCard) {
+                installCard.classList.remove('hidden');
+            }
+        });
+
+        if (btnInstall) {
+            btnInstall.addEventListener('click', async () => {
+                if (!this.deferredPrompt) return;
+                // Show the install prompt
+                this.deferredPrompt.prompt();
+                // Wait for the user to respond to the prompt
+                const { outcome } = await this.deferredPrompt.userChoice;
+                console.log(`User response to install: ${outcome}`);
+                // Clear the prompt, it can't be reused
+                this.deferredPrompt = null;
+                // Hide the install card
+                if (installCard) {
+                    installCard.classList.add('hidden');
+                }
+            });
+        }
+
+        window.addEventListener('appinstalled', (e) => {
+            console.log('LifeCycle was installed');
+            this.deferredPrompt = null;
+            if (installCard) {
+                installCard.classList.add('hidden');
+            }
+        });
     }
 
     start() {
