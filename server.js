@@ -1,15 +1,42 @@
 require('dotenv').config();
 const express = require('express');
 const path = require('path');
+const fs = require('fs');
 const webpush = require('web-push');
 const { createClient } = require('@supabase/supabase-js');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// Configurar Web Push VAPID
-const publicKey = process.env.VAPID_PUBLIC_KEY || 'BE5_lw48aJn_k7RoB8dj9F5Bdvde7H-Qq75HiCwrDFwDZhIk20FEPNiNzMB91yO0knR7bcn_Rovsp73jWJ3_2aQ';
-const privateKey = process.env.VAPID_PRIVATE_KEY || 'v2T0GykaYsblVosxARczsKlGk766qJ8AdE3fsA-2Elo';
+// Configurar Web Push VAPID de forma segura (sin hardcodear en Git)
+let publicKey = process.env.VAPID_PUBLIC_KEY;
+let privateKey = process.env.VAPID_PRIVATE_KEY;
+
+if (!publicKey || !privateKey) {
+    const keysPath = path.join(__dirname, 'vapid-keys.json');
+    if (fs.existsSync(keysPath)) {
+        try {
+            const fileData = JSON.parse(fs.readFileSync(keysPath, 'utf8'));
+            publicKey = fileData.publicKey;
+            privateKey = fileData.privateKey;
+        } catch (err) {
+            console.error("Error reading vapid-keys.json:", err);
+        }
+    }
+    
+    if (!publicKey || !privateKey) {
+        console.log("Generating new VAPID keys...");
+        const newKeys = webpush.generateVAPIDKeys();
+        publicKey = newKeys.publicKey;
+        privateKey = newKeys.privateKey;
+        try {
+            fs.writeFileSync(keysPath, JSON.stringify(newKeys, null, 2), 'utf8');
+            console.log("VAPID keys saved to vapid-keys.json (ignored by git).");
+        } catch (err) {
+            console.error("Error writing vapid-keys.json:", err);
+        }
+    }
+}
 
 webpush.setVapidDetails(
     'mailto:contacto@fabriziococca.com',
