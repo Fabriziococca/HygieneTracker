@@ -1510,6 +1510,13 @@ textarea:focus {
         grid-template-columns: repeat(2, 1fr);
         gap: 1.5rem;
     }
+    .main-nav {
+        max-width: 100%;
+        justify-content: center;
+        overflow-x: visible;
+        white-space: normal;
+        flex-wrap: wrap;
+    }
 }
 
 /* Tablas de Nutrición */

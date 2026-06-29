@@ -3133,7 +3133,7 @@ class ProjectsModule {
 
         planSave?.addEventListener('click', () => {
             if (!this.currentProjectId) return;
-            const p = this.projects.find(proj => proj.id === this.currentProjectId);
+            const p = this.projects.find(proj => String(proj.id) === String(this.currentProjectId));
             if (!p) return;
 
             p.summary = document.getElementById('proj-summary-textarea').value.trim();
@@ -3147,7 +3147,7 @@ class ProjectsModule {
 
         btnAddTask?.addEventListener('click', () => {
             if (!this.currentProjectId) return;
-            const p = this.projects.find(proj => proj.id === this.currentProjectId);
+            const p = this.projects.find(proj => String(proj.id) === String(this.currentProjectId));
             if (!p) return;
 
             const taskInput = document.getElementById('proj-new-task-input');
@@ -3499,8 +3499,8 @@ class ProjectsModule {
     }
 
     openPlanModal(id) {
-        this.currentProjectId = parseInt(id);
-        const p = this.projects.find(proj => proj.id === this.currentProjectId);
+        this.currentProjectId = id;
+        const p = this.projects.find(proj => String(proj.id) === String(id));
         if (!p) return;
 
         document.getElementById('proj-summary-textarea').value = p.summary || '';
@@ -3530,7 +3530,7 @@ class ProjectsModule {
 
     toggleTask(taskId) {
         if (!this.currentProjectId) return;
-        const p = this.projects.find(proj => proj.id === this.currentProjectId);
+        const p = this.projects.find(proj => String(proj.id) === String(this.currentProjectId));
         if (!p) return;
 
         const task = p.tasks.find(t => t.id === taskId);
@@ -3543,7 +3543,7 @@ class ProjectsModule {
 
     deleteTask(taskId) {
         if (!this.currentProjectId) return;
-        const p = this.projects.find(proj => proj.id === this.currentProjectId);
+        const p = this.projects.find(proj => String(proj.id) === String(this.currentProjectId));
         if (!p) return;
 
         p.tasks = p.tasks.filter(t => t.id !== taskId);
@@ -3552,7 +3552,7 @@ class ProjectsModule {
     }
 
     openEditModal(id) {
-        this.currentProjectId = parseInt(id);
+        this.currentProjectId = id;
         const modal = document.getElementById('projects-edit-modal');
         if (modal) {
             document.getElementById('proj-extraDays').value = 0;
