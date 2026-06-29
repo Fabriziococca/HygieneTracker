@@ -975,11 +975,19 @@ class HealthModule {
         this.bloodFormFile?.addEventListener('change', (e) => {
             const file = e.target.files[0];
             if (file) {
-                if (file.size > 1.5 * 1024 * 1024) {
-                    alert('El archivo es demasiado grande (máximo 1.5MB en modo offline para evitar saturar el navegador). En la siguiente fase con base de datos en la nube no habrá este límite.');
+                // If logged in, skip the local 1.5MB constraint (only apply 15MB limit)
+                const isLoggedIn = this.controller.auth && this.controller.auth.user;
+                const maxSize = isLoggedIn ? 15 * 1024 * 1024 : 1.5 * 1024 * 1024;
+                if (file.size > maxSize) {
+                    if (isLoggedIn) {
+                        alert('El archivo es demasiado grande (máximo 15MB para subidas a la nube).');
+                    } else {
+                        alert('El archivo es demasiado grande (máximo 1.5MB en modo offline para evitar saturar el navegador). Inicia sesión para subir archivos de hasta 15MB.');
+                    }
                     this.bloodFormFile.value = '';
                     this.attachedFileData = null;
                     this.attachedFileName = null;
+                    this.attachedFile = null;
                     if (this.bloodFormFileName) {
                         this.bloodFormFileName.classList.add('hidden');
                         this.bloodFormFileName.innerText = '';
@@ -987,6 +995,7 @@ class HealthModule {
                     return;
                 }
 
+                this.attachedFile = file;
                 const reader = new FileReader();
                 reader.onload = (event) => {
                     this.attachedFileData = event.target.result;
@@ -1022,9 +1031,10 @@ class HealthModule {
         }
         this.attachedFileData = null;
         this.attachedFileName = null;
+        this.attachedFile = null;
     }
 
-    saveBloodTestEntry() {
+    async saveBloodTestEntry() {
         const dateVal = this.bloodFormDate?.value;
         if (!dateVal) {
             alert('Por favor selecciona la fecha del estudio.');
@@ -1038,6 +1048,19 @@ class HealthModule {
             fileName: this.attachedFileName || null,
             fileData: this.attachedFileData || null
         };
+
+        // If authenticated and file is attached, upload to Supabase Storage
+        if (this.controller.auth && this.controller.auth.user && this.attachedFile) {
+            try {
+                this.controller.auth.updateSyncBadge('syncing', "Subiendo archivo...");
+                const publicUrl = await this.controller.auth.uploadFile(entry.id, this.attachedFile);
+                entry.fileData = publicUrl;
+                entry.isCloudFile = true;
+            } catch (err) {
+                console.error("Error uploading file to storage:", err);
+                alert("Error al subir archivo a la nube. Se guardará de forma local temporalmente.");
+            }
+        }
 
         this.bloodTests.push(entry);
         this.bloodTests.sort((a, b) => new Date(b.date) - new Date(a.date));
@@ -1289,7 +1312,8 @@ class HealthModule {
 
                     let linksHtml = '';
                     if (test.fileData) {
-                        linksHtml += `<a href="${test.fileData}" download="${test.fileName || 'analisis.pdf'}" class="btn-text" style="color: var(--primary-color); display:flex; align-items:center; gap:0.25rem;" title="${test.fileName}"><i class="ph ph-file-pdf"></i> PDF</a>`;
+                        const target = test.isCloudFile ? 'target="_blank"' : `download="${test.fileName || 'analisis.pdf'}"`;
+                        linksHtml += `<a href="${test.fileData}" ${target} class="btn-text" style="color: var(--primary-color); display:flex; align-items:center; gap:0.25rem;" title="${test.fileName || 'PDF'}"><i class="ph ph-file-pdf"></i> PDF</a>`;
                     } else if (test.pdfUrl) {
                         linksHtml += `<a href="${test.pdfUrl}" target="_blank" class="btn-text" style="color: var(--primary-color); display:flex; align-items:center; gap:0.25rem;"><i class="ph ph-file-pdf"></i> PDF</a>`;
                     }
@@ -3942,10 +3966,366 @@ class BackupModule {
 
 
 // ==========================================================================
+// MÓDULO DE AUTENTICACIÓN Y SINCRONIZACIÓN (SUPABASE)
+// ==========================================================================
+class AuthSyncModule {
+    constructor(appController) {
+        this.app = appController;
+        this.supabase = null;
+        this.user = null;
+        this.config = null;
+        
+        // Dom Elements
+        this.authLoading = document.getElementById('auth-loading');
+        this.authLoggedOut = document.getElementById('auth-logged-out');
+        this.authLoggedIn = document.getElementById('auth-logged-in');
+        
+        this.authForm = document.getElementById('auth-form');
+        this.authEmail = document.getElementById('auth-email');
+        this.authPassword = document.getElementById('auth-password');
+        this.btnLogin = document.getElementById('btn-login');
+        this.btnSignup = document.getElementById('btn-signup');
+        
+        this.profileEmail = document.getElementById('profile-email');
+        this.syncStatusBadge = document.getElementById('sync-status-badge');
+        this.btnSyncNow = document.getElementById('btn-sync-now');
+        this.btnLogout = document.getElementById('btn-logout');
+        
+        this.init();
+    }
+
+    async init() {
+        try {
+            // 1. Fetch credentials from server config endpoint
+            const res = await fetch('/api/config');
+            this.config = await res.json();
+            
+            if (!this.config.supabaseUrl || !this.config.supabaseAnonKey) {
+                console.log("Supabase credentials not configured in backend. Running in offline/localStorage mode.");
+                this.showOfflineMode();
+                return;
+            }
+            
+            // 2. Initialize Supabase client
+            this.supabase = supabase.createClient(this.config.supabaseUrl, this.config.supabaseAnonKey);
+            
+            // 3. Bind UI listeners
+            this.setupListeners();
+            
+            // 4. Initial session check
+            const { data: { session } } = await this.supabase.auth.getSession();
+            this.handleAuthStateChange(session?.user || null);
+            
+            // 5. Setup auth state change listener
+            this.supabase.auth.onAuthStateChange((event, session) => {
+                this.handleAuthStateChange(session?.user || null);
+            });
+            
+        } catch (err) {
+            console.error("Error initializing Supabase:", err);
+            this.showOfflineMode();
+        }
+    }
+
+    showOfflineMode() {
+        this.authLoading?.classList.add('hidden');
+        this.authLoggedOut?.classList.add('hidden');
+        this.authLoggedIn?.classList.add('hidden');
+    }
+
+    setupListeners() {
+        // Form Submit handles Login
+        this.authForm?.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const action = e.submitter?.id; // 'btn-login'
+            if (action === 'btn-login') {
+                await this.login();
+            }
+        });
+
+        // Signup Button Click
+        this.btnSignup?.addEventListener('click', async (e) => {
+            e.preventDefault();
+            await this.signup();
+        });
+
+        // Logout Button Click
+        this.btnLogout?.addEventListener('click', async () => {
+            await this.logout();
+        });
+
+        // Manual Sync Button Click
+        this.btnSyncNow?.addEventListener('click', async () => {
+            await this.syncToCloud(true);
+        });
+    }
+
+    async login() {
+        const email = this.authEmail?.value;
+        const password = this.authPassword?.value;
+        if (!email || !password) return;
+        
+        this.setLoading(true, "Iniciando sesión...");
+        
+        const { data, error } = await this.supabase.auth.signInWithPassword({ email, password });
+        
+        if (error) {
+            alert("Error al iniciar sesión: " + error.message);
+            this.setLoading(false);
+        }
+    }
+
+    async signup() {
+        const email = this.authEmail?.value;
+        const password = this.authPassword?.value;
+        if (!email || !password) return;
+        
+        if (password.length < 6) {
+            alert("La contraseña debe tener al menos 6 caracteres.");
+            return;
+        }
+        
+        this.setLoading(true, "Creando cuenta...");
+        
+        const { data, error } = await this.supabase.auth.signUp({ email, password });
+        
+        if (error) {
+            alert("Error al registrarse: " + error.message);
+            this.setLoading(false);
+        } else {
+            alert("¡Registro exitoso! Si se configuró confirmación por correo, revisa tu casilla. De lo contrario, ya has iniciado sesión.");
+            this.setLoading(false);
+        }
+    }
+
+    async logout() {
+        if (confirm("¿Estás seguro de que deseas cerrar sesión? Volverás al modo local sin conexión.")) {
+            this.setLoading(true, "Cerrando sesión...");
+            await this.supabase.auth.signOut();
+            location.reload();
+        }
+    }
+
+    async handleAuthStateChange(user) {
+        this.user = user;
+        this.setLoading(false);
+        
+        if (user) {
+            // Logged in
+            if (this.authLoggedOut) this.authLoggedOut.classList.add('hidden');
+            if (this.authLoggedIn) this.authLoggedIn.classList.remove('hidden');
+            if (this.profileEmail) this.profileEmail.innerText = user.email;
+            
+            // Trigger sync check
+            await this.checkAndSyncData();
+        } else {
+            // Logged out
+            if (this.authLoggedIn) this.authLoggedIn.classList.add('hidden');
+            if (this.authLoggedOut) this.authLoggedOut.classList.remove('hidden');
+            if (this.profileEmail) this.profileEmail.innerText = '';
+        }
+    }
+
+    setLoading(isLoading, text = "") {
+        if (isLoading) {
+            if (this.authLoading) {
+                this.authLoading.classList.remove('hidden');
+                this.authLoading.querySelector('p').innerHTML = `
+                    <i class="ph ph-circle-notch" style="animation: spin 1s linear infinite; font-size: 1.25rem;"></i> ${text}
+                `;
+            }
+            this.authLoggedOut?.classList.add('hidden');
+            this.authLoggedIn?.classList.add('hidden');
+        } else {
+            this.authLoading?.classList.add('hidden');
+        }
+    }
+
+    // Gathers all 13 keys from localStorage to create the unified JSON
+    gatherLocalData() {
+        return {
+            hygiene_tracker_data: localStorage.getItem('hygiene_tracker_data'),
+            groomingData_v2: localStorage.getItem('groomingData_v2'),
+            lensesStartTime: localStorage.getItem('lensesStartTime'),
+            lensesHistory: localStorage.getItem('lensesHistory'),
+            lensStock: localStorage.getItem('lensStock'),
+            lensDate: localStorage.getItem('lensDate'),
+            solutionDate: localStorage.getItem('solutionDate'),
+            caseDate: localStorage.getItem('caseDate'),
+            systaneDate: localStorage.getItem('systaneDate'),
+            clothWashDate: localStorage.getItem('clothWashDate'),
+            clothChangeDate: localStorage.getItem('clothChangeDate'),
+            health_medical_data: localStorage.getItem('health_medical_data'),
+            health_blood_tests: localStorage.getItem('health_blood_tests'),
+            vehicle_odometer: localStorage.getItem('vehicle_odometer'),
+            vehicle_maintenance_log: localStorage.getItem('vehicle_maintenance_log'),
+            gym_records: localStorage.getItem('gym_records'),
+            gym_routine: localStorage.getItem('gym_routine'),
+            gym_routine_focus: localStorage.getItem('gym_routine_focus'),
+            gym_sessions: localStorage.getItem('gym_sessions'),
+            gym_meals: localStorage.getItem('gym_meals'),
+            gym_supplements: localStorage.getItem('gym_supplements'),
+            gym_weight: localStorage.getItem('gym_weight'),
+            projectPulseData: localStorage.getItem('projectPulseData'),
+            projectPulseHistory: localStorage.getItem('projectPulseHistory')
+        };
+    }
+
+    // Checks if cloud data exists, prompts user to sync/merge on first login
+    async checkAndSyncData() {
+        if (!this.user) return;
+        
+        try {
+            // 1. Read cloud data
+            const { data, error } = await this.supabase
+                .from('user_data')
+                .select('data')
+                .eq('user_id', this.user.id)
+                .single();
+                
+            const cloudData = data?.data;
+            const hasLocalData = this.hasAnyLocalData();
+            
+            if (error && error.code !== 'PGRST116') { // PGRST116 means no row found
+                console.error("Error fetching cloud data:", error);
+                this.updateSyncBadge('error', "Error al obtener datos");
+                return;
+            }
+            
+            if (!cloudData) {
+                // No data in cloud yet.
+                if (hasLocalData) {
+                    // Automatically push local data to cloud on first login
+                    console.log("No data on cloud, uploading local data...");
+                    await this.syncToCloud(false);
+                } else {
+                    // Create empty row in cloud
+                    await this.supabase.from('user_data').insert({
+                        user_id: this.user.id,
+                        data: {}
+                    });
+                    this.updateSyncBadge('synced', "Sincronizado");
+                }
+            } else {
+                // Cloud data exists!
+                if (hasLocalData) {
+                    const confirmMerge = confirm(
+                        "¡Sesión iniciada! Se encontraron datos en la nube y también datos locales. \n\n" +
+                        "¿Deseas CARGAR los datos de la nube y sobreescribir los locales?\n" +
+                        "(Acepta para usar los datos de la nube. Cancela si deseas mantener los locales y sobreescribir la nube)."
+                    );
+                    
+                    if (confirmMerge) {
+                        this.restoreDataLocally(cloudData);
+                        alert("Datos de la nube restaurados localmente.");
+                        location.reload();
+                    } else {
+                        // Push local data to overwrite cloud
+                        await this.syncToCloud(false);
+                    }
+                } else {
+                    // No local data, just pull from cloud
+                    this.restoreDataLocally(cloudData);
+                    location.reload();
+                }
+            }
+        } catch (err) {
+            console.error("Sync data error:", err);
+            this.updateSyncBadge('error', "Error de conexión");
+        }
+    }
+
+    hasAnyLocalData() {
+        const local = this.gatherLocalData();
+        return Object.values(local).some(v => v !== null && v !== '');
+    }
+
+    async syncToCloud(isManual = false) {
+        if (!this.user || !this.supabase) return;
+        
+        this.updateSyncBadge('syncing', "Sincronizando...");
+        
+        const localData = this.gatherLocalData();
+        
+        const { error } = await this.supabase
+            .from('user_data')
+            .upsert({
+                user_id: this.user.id,
+                data: localData,
+                updated_at: new Date().toISOString()
+            });
+            
+        if (error) {
+            console.error("Sync to cloud error:", error);
+            this.updateSyncBadge('error', "Error al guardar");
+            if (isManual) alert("Error al sincronizar datos con la nube: " + error.message);
+        } else {
+            this.updateSyncBadge('synced', "Sincronizado");
+            if (isManual) alert("¡Datos sincronizados correctamente con la nube!");
+        }
+    }
+
+    restoreDataLocally(cloudData) {
+        Object.keys(cloudData).forEach(key => {
+            const val = cloudData[key];
+            if (val !== null && val !== undefined) {
+                localStorage.setItem(key, val);
+            }
+        });
+    }
+
+    updateSyncBadge(state, text) {
+        if (!this.syncStatusBadge) return;
+        
+        this.syncStatusBadge.className = 'badge';
+        if (state === 'synced') {
+            this.syncStatusBadge.classList.add('green');
+            this.syncStatusBadge.innerHTML = `<i class="ph ph-cloud-check" style="font-size:1rem; margin-right:4px;"></i> ${text}`;
+        } else if (state === 'syncing') {
+            this.syncStatusBadge.classList.add('orange');
+            this.syncStatusBadge.innerHTML = `<i class="ph ph-circle-notch" style="animation: spin 1s linear infinite; font-size:1rem; margin-right:4px;"></i> ${text}`;
+        } else if (state === 'error') {
+            this.syncStatusBadge.classList.add('red');
+            this.syncStatusBadge.innerHTML = `<i class="ph ph-cloud-warning" style="font-size:1rem; margin-right:4px;"></i> ${text}`;
+        }
+    }
+
+    // Upload helper for files
+    async uploadFile(fileId, file) {
+        if (!this.user || !this.supabase) {
+            throw new Error("Usuario no autenticado");
+        }
+        
+        const filePath = `${this.user.id}/${fileId}_${file.name}`;
+        
+        const { data, error } = await this.supabase.storage
+            .from('blood-tests')
+            .upload(filePath, file, {
+                cacheControl: '3600',
+                upsert: true
+            });
+            
+        if (error) {
+            throw error;
+        }
+        
+        // Get public URL
+        const { data: { publicUrl } } = this.supabase.storage
+            .from('blood-tests')
+            .getPublicUrl(filePath);
+            
+        return publicUrl;
+    }
+}
+
+
+// ==========================================================================
 // CONTROLADOR CENTRAL: APP CONTROLLER
 // ==========================================================================
 class AppController {
     constructor() {
+        window.lifecycle_controller = this;
+        this.syncDebounceTimer = null;
         this.currentEditType = null;
         this.currentEditId = null;
 
@@ -4153,6 +4533,7 @@ class AppController {
         this.gym = new GymModule(this);
         this.projects = new ProjectsModule(this);
         this.backups = new BackupModule(this);
+        this.auth = new AuthSyncModule(this);
         
         setInterval(() => {
             const activeSection = document.querySelector('.main-section:not(.hidden)');
@@ -4167,7 +4548,35 @@ class AppController {
             }
         }, 1000 * 60 * 60);
     }
+
+    triggerDataSync(key) {
+        const trackedKeys = [
+            'hygiene_tracker_data', 'groomingData_v2', 'lensesStartTime', 
+            'lensesHistory', 'lensStock', 'lensDate', 'solutionDate', 
+            'caseDate', 'systaneDate', 'clothWashDate', 'clothChangeDate', 
+            'health_medical_data', 'health_blood_tests', 'vehicle_odometer', 
+            'vehicle_maintenance_log', 'gym_records', 'gym_routine', 
+            'gym_routine_focus', 'gym_sessions', 'gym_meals', 
+            'gym_supplements', 'gym_weight', 'projectPulseData', 'projectPulseHistory'
+        ];
+        
+        if (trackedKeys.includes(key) && this.auth && this.auth.user) {
+            clearTimeout(this.syncDebounceTimer);
+            this.syncDebounceTimer = setTimeout(() => {
+                this.auth.syncToCloud();
+            }, 1000);
+        }
+    }
 }
+
+// Intercept localStorage.setItem to trigger automatic background sync
+const originalSetItem = localStorage.setItem;
+localStorage.setItem = function(key, value) {
+    originalSetItem.apply(this, arguments);
+    if (window.lifecycle_controller) {
+        window.lifecycle_controller.triggerDataSync(key);
+    }
+};
 
 document.addEventListener('DOMContentLoaded', () => {
     const controller = new AppController();
