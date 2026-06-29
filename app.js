@@ -3278,8 +3278,9 @@ class ProjectsModule {
 
         this.history.forEach(p => {
             totalNetSum += (p.budgetNet || 0);
-            if (p.deliveredAt) {
-                const del = new Date(p.deliveredAt);
+            const dateStr = p.deliveredDate || p.deliveredAt;
+            if (dateStr) {
+                const del = new Date(dateStr);
                 if (del.getFullYear() === currYear) {
                     yearNetSum += (p.budgetNet || 0);
                     if (del.getMonth() === currMonth) {
@@ -3606,7 +3607,8 @@ class ProjectsModule {
         // Agrupar
         const monthsMap = {};
         this.history.forEach(p => {
-            const delDate = p.deliveredDate ? new Date(p.deliveredDate) : new Date();
+            const dateStr = p.deliveredDate || p.deliveredAt;
+            const delDate = dateStr ? new Date(dateStr) : new Date();
             const year = delDate.getFullYear();
             const month = delDate.getMonth();
             const key = `${year}-${String(month + 1).padStart(2, '0')}`;
@@ -3693,8 +3695,9 @@ class ProjectsModule {
 
         let earliestDate = now;
         this.history.forEach(p => {
-            if (p.deliveredDate) {
-                const d = new Date(p.deliveredDate);
+            const dateStr = p.deliveredDate || p.deliveredAt;
+            if (dateStr) {
+                const d = new Date(dateStr);
                 if (d < earliestDate) earliestDate = d;
             }
         });
@@ -3717,8 +3720,9 @@ class ProjectsModule {
         const dateLimit6 = new Date(currentYear, currentMonth - 5, 1);
 
         this.history.forEach(p => {
-            if (!p.deliveredDate) return;
-            const d = new Date(p.deliveredDate);
+            const dateStr = p.deliveredDate || p.deliveredAt;
+            if (!dateStr) return;
+            const d = new Date(dateStr);
             if (d >= dateLimit3) sum3Months += (p.budgetNet || 0);
             if (d >= dateLimit6) sum6Months += (p.budgetNet || 0);
         });
@@ -3991,6 +3995,10 @@ class AuthSyncModule {
         this.btnSyncNow = document.getElementById('btn-sync-now');
         this.btnLogout = document.getElementById('btn-logout');
         
+        this.pushNotificationsCard = document.getElementById('push-notifications-card');
+        this.btnEnablePush = document.getElementById('btn-enable-push');
+        this.btnTestPush = document.getElementById('btn-test-push');
+        
         this.realtimeChannel = null;
         this.init();
     }
@@ -4059,6 +4067,15 @@ class AuthSyncModule {
         this.btnSyncNow?.addEventListener('click', async () => {
             await this.syncToCloud(true);
         });
+
+        // Push Notifications Click Listeners
+        this.btnEnablePush?.addEventListener('click', async () => {
+            await this.enablePushNotifications();
+        });
+
+        this.btnTestPush?.addEventListener('click', async () => {
+            await this.sendTestPushNotification();
+        });
     }
 
     async login() {
@@ -4120,6 +4137,10 @@ class AuthSyncModule {
             if (this.authLoggedOut) this.authLoggedOut.classList.add('hidden');
             if (this.authLoggedIn) this.authLoggedIn.classList.remove('hidden');
             if (this.profileEmail) this.profileEmail.innerText = user.email;
+            if (this.pushNotificationsCard) this.pushNotificationsCard.classList.remove('hidden');
+            
+            // Check push subscription status
+            await this.checkPushSubscriptionStatus();
             
             // Trigger sync check
             await this.checkAndSyncData();
@@ -4131,6 +4152,7 @@ class AuthSyncModule {
             if (this.authLoggedIn) this.authLoggedIn.classList.add('hidden');
             if (this.authLoggedOut) this.authLoggedOut.classList.remove('hidden');
             if (this.profileEmail) this.profileEmail.innerText = '';
+            if (this.pushNotificationsCard) this.pushNotificationsCard.classList.add('hidden');
 
             // Unsubscribe from channels
             if (this.realtimeChannel) {
@@ -4423,6 +4445,136 @@ class AuthSyncModule {
                 }
             })
             .subscribe();
+    }
+
+    async enablePushNotifications() {
+        if (!('serviceWorker' in navigator) || !('PushManager' in window)) {
+            alert('Las notificaciones push no son compatibles con este navegador o dispositivo.');
+            return;
+        }
+
+        try {
+            // 1. Request permission
+            const permission = await Notification.requestPermission();
+            if (permission !== 'granted') {
+                alert('Permiso de notificaciones denegado.');
+                return;
+            }
+
+            // 2. Get Service Worker registration
+            const registration = await navigator.serviceWorker.ready;
+
+            // 3. Get VAPID public key from backend config
+            const vapidKey = this.config.vapidPublicKey;
+            if (!vapidKey) {
+                alert('No se pudo obtener la clave VAPID pública desde el backend.');
+                return;
+            }
+
+            // Convert VAPID key to Uint8Array
+            const convertedVapidKey = this.urlBase64ToUint8Array(vapidKey);
+
+            // 4. Subscribe to Push Manager
+            const subscription = await registration.pushManager.subscribe({
+                userVisibleOnly: true,
+                applicationServerKey: convertedVapidKey
+            });
+
+            // 5. Send subscription to server
+            const res = await fetch('/api/subscribe', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    userId: this.user.id,
+                    subscription: subscription
+                })
+            });
+
+            if (!res.ok) throw new Error('Error al registrar la suscripción en el servidor');
+
+            // 6. Update UI
+            alert('¡Notificaciones activadas con éxito en este dispositivo!');
+            await this.checkPushSubscriptionStatus();
+
+        } catch (e) {
+            console.error('Error enabling push notifications:', e);
+            alert('Error al activar notificaciones: ' + e.message);
+        }
+    }
+
+    async checkPushSubscriptionStatus() {
+        if (!this.user) return;
+        if (!('serviceWorker' in navigator) || !('PushManager' in window)) {
+            if (this.btnEnablePush) {
+                this.btnEnablePush.disabled = true;
+                this.btnEnablePush.innerText = 'Notificaciones No Compatibles';
+            }
+            return;
+        }
+
+        try {
+            const registration = await navigator.serviceWorker.ready;
+            const subscription = await registration.pushManager.getSubscription();
+            
+            if (subscription) {
+                if (this.btnEnablePush) {
+                    this.btnEnablePush.innerText = '🔔 Notificaciones Activas en este Dispositivo';
+                    this.btnEnablePush.style.borderColor = 'var(--status-green)';
+                    this.btnEnablePush.style.color = 'var(--status-green)';
+                }
+                this.btnTestPush?.classList.remove('hidden');
+            } else {
+                if (this.btnEnablePush) {
+                    this.btnEnablePush.innerText = '🔔 Activar Notificaciones en este Dispositivo';
+                    this.btnEnablePush.style.borderColor = '';
+                    this.btnEnablePush.style.color = '';
+                }
+                this.btnTestPush?.classList.add('hidden');
+            }
+        } catch (e) {
+            console.error('Error checking push subscription status:', e);
+        }
+    }
+
+    async sendTestPushNotification() {
+        try {
+            const registration = await navigator.serviceWorker.ready;
+            const subscription = await registration.pushManager.getSubscription();
+            if (!subscription) {
+                alert('No se encontró una suscripción activa en este dispositivo.');
+                return;
+            }
+
+            const res = await fetch('/api/test-push', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ subscription })
+            });
+
+            if (res.ok) {
+                alert('Notificación de prueba programada. Bloquea tu celular o quédate en espera; llegará en 5 segundos.');
+            } else {
+                alert('Error al programar la notificación de prueba.');
+            }
+        } catch (e) {
+            console.error('Error triggering test push:', e);
+            alert('Error al probar: ' + e.message);
+        }
+    }
+
+    urlBase64ToUint8Array(base64String) {
+        const padding = '='.repeat((4 - base64String.length % 4) % 4);
+        const base64 = (base64String + padding)
+            .replace(/\-/g, '+')
+            .replace(/_/g, '/');
+
+        const rawData = window.atob(base64);
+        const outputArray = new Uint8Array(rawData.length);
+
+        for (let i = 0; i < rawData.length; ++i) {
+            outputArray[i] = rawData.charCodeAt(i);
+        }
+        return outputArray;
     }
 }
 
