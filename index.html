@@ -1400,7 +1400,45 @@
     <script>
         if ('serviceWorker' in navigator) {
             window.addEventListener('load', () => {
-                navigator.serviceWorker.register('sw.js');
+                navigator.serviceWorker.register('sw.js').then(reg => {
+                    // Chequear actualizaciones en segundo plano cada 60 segundos
+                    setInterval(() => {
+                        reg.update().catch(() => {});
+                    }, 60 * 1000);
+
+                    // Detectar cuando se encuentra un nuevo Service Worker
+                    reg.addEventListener('updatefound', () => {
+                        const newWorker = reg.installing;
+                        if (newWorker) {
+                            newWorker.addEventListener('statechange', () => {
+                                if (newWorker.state === 'installed' && navigator.serviceWorker.controller) {
+                                    // Forzar la activación del nuevo service worker
+                                    newWorker.postMessage({ type: 'SKIP_WAITING' });
+                                }
+                            });
+                        }
+                    });
+                }).catch(err => {
+                    console.error("Error registrando Service Worker:", err);
+                });
+            });
+
+            // Recargar la página automáticamente cuando el nuevo Service Worker toma el control
+            let refreshing = false;
+            navigator.serviceWorker.addEventListener('controllerchange', () => {
+                if (!refreshing) {
+                    refreshing = true;
+                    window.location.reload();
+                }
+            });
+
+            // Chequear actualización al volver del segundo plano (focus de la app)
+            document.addEventListener('visibilitychange', () => {
+                if (document.visibilityState === 'visible') {
+                    navigator.serviceWorker.ready.then(reg => {
+                        reg.update().catch(() => {});
+                    });
+                }
             });
         }
     </script>

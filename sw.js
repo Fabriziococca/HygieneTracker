@@ -61,3 +61,10 @@ self.addEventListener('notificationclick', (event) => {
         })
     );
 });
+
+// Forzar la activación del service worker cuando el cliente lo solicite
+self.addEventListener('message', (event) => {
+    if (event.data && event.data.type === 'SKIP_WAITING') {
+        self.skipWaiting();
+    }
+});
