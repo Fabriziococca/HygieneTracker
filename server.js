@@ -11,7 +11,7 @@ const PORT = process.env.PORT || 3000;
 const publicKey = process.env.VAPID_PUBLIC_KEY || 'BE5_lw48aJn_k7RoB8dj9F5Bdvde7H-Qq75HiCwrDFwDZhIk20FEPNiNzMB91yO0knR7bcn_Rovsp73jWJ3_2aQ';
 const privateKey = process.env.VAPID_PRIVATE_KEY || 'v2T0GykaYsblVosxARczsKlGk766qJ8AdE3fsA-2Elo';
 
-webpush.setVAPIDDetails(
+webpush.setVapidDetails(
     'mailto:contacto@fabriziococca.com',
     publicKey,
     privateKey
@@ -20,7 +20,11 @@ webpush.setVAPIDDetails(
 // Inicializar Supabase Client (bypasea RLS usando Service Role si está disponible)
 const supabaseUrl = process.env.SUPABASE_URL || '';
 const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_ANON_KEY || '';
-const supabase = createClient(supabaseUrl, supabaseKey);
+const supabase = supabaseUrl ? createClient(supabaseUrl, supabaseKey) : null;
+
+if (!supabase) {
+    console.warn("⚠️ Advertencia: SUPABASE_URL no está configurada. Supabase no estará disponible en el backend.");
+}
 
 // Middleware
 app.use(express.json());
@@ -39,6 +43,7 @@ app.get('/api/config', (req, res) => {
 app.post('/api/subscribe', async (req, res) => {
     const { userId, subscription } = req.body;
     if (!userId || !subscription) return res.status(400).json({ error: 'Datos incompletos' });
+    if (!supabase) return res.status(500).json({ error: 'Supabase no configurado en el servidor' });
 
     try {
         const { error } = await supabase.from('push_subscriptions').upsert({
@@ -113,7 +118,7 @@ setInterval(() => {
 // Función de Análisis de Datos y Envío de Alertas
 // ==========================================================================
 async function checkAndSendDailyReminders() {
-    if (!supabaseUrl || !supabaseKey) return;
+    if (!supabase) return;
     
     try {
         console.log("[Reminders] Consultando datos de Supabase...");
