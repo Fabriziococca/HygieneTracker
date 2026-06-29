@@ -4480,17 +4480,28 @@ class AuthSyncModule {
                 applicationServerKey: convertedVapidKey
             });
 
-            // 5. Send subscription to server
-            const res = await fetch('/api/subscribe', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    userId: this.user.id,
-                    subscription: subscription
-                })
-            });
+            // 5. Send subscription to Supabase directly (runs in user's authenticated context)
+            const subscriptionJSON = subscription.toJSON();
+            
+            try {
+                // Clean up old subscriptions for the same endpoint to avoid duplicates
+                await this.supabase
+                    .from('push_subscriptions')
+                    .delete()
+                    .eq('user_id', this.user.id)
+                    .eq('subscription->>endpoint', subscriptionJSON.endpoint);
+            } catch (err) {
+                console.warn("Error cleaning up old subscription:", err);
+            }
 
-            if (!res.ok) throw new Error('Error al registrar la suscripción en el servidor');
+            const { error: dbError } = await this.supabase
+                .from('push_subscriptions')
+                .insert({
+                    user_id: this.user.id,
+                    subscription: subscriptionJSON
+                });
+
+            if (dbError) throw dbError;
 
             // 6. Update UI
             alert('¡Notificaciones activadas con éxito en este dispositivo!');
@@ -4548,7 +4559,7 @@ class AuthSyncModule {
             const res = await fetch('/api/test-push', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ subscription })
+                body: JSON.stringify({ subscription: subscription.toJSON() })
             });
 
             if (res.ok) {
