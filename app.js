@@ -3179,8 +3179,8 @@ class ProjectsModule {
                 const gross = parseFloat(document.getElementById('budgetGross').value);
                 const feeType = document.getElementById('workanaFeeSelect').value;
                 const customPct = parseFloat(document.getElementById('customWorkanaFee').value) || 0;
-                const isDel = document.getElementById('isDelegated').checked;
-                const isRec = document.getElementById('isReceived').checked;
+                const isDel = false;
+                const isRec = false;
 
                 const timeTotal = days * 24 * 60 * 60 * 1000;
                 const deadline = new Date(new Date(accepted).getTime() + timeTotal).toISOString();

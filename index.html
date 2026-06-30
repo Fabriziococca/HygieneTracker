@@ -1031,19 +1031,7 @@
                             <label for="customWorkanaFee">Comisión Workana Manual (%)</label>
                             <input type="number" id="customWorkanaFee" class="number-input" min="0" max="100" step="0.1" value="0">
                         </div>
-
-                        <div class="form-row" style="margin: 1rem 0; display:flex; flex-direction:column; gap:10px;">
-                            <label style="display: flex; align-items: center; gap: 10px; cursor: pointer; background: rgba(255,255,255,0.05); padding: 12px; border-radius: 8px; border: 1px solid var(--surface-border);">
-                                <input type="checkbox" id="isDelegated" style="width: 18px; height: 18px; accent-color: var(--primary-color);">
-                                <span style="font-size: 0.9rem; color: white;">Lo delego a otro (Me llevo el 30%)</span>
-                            </label>
-                            <label style="display: flex; align-items: center; gap: 10px; cursor: pointer; background: rgba(255,255,255,0.05); padding: 12px; border-radius: 8px; border: 1px solid var(--surface-border);">
-                                <input type="checkbox" id="isReceived" style="width: 18px; height: 18px; accent-color: var(--primary-color);">
-                                <span style="font-size: 0.9rem; color: white;">Recibido de Fabro (Me llevo el 70%)</span>
-                            </label>
-                        </div>
-
-                        <button type="submit" class="btn btn-primary">➕ Agregar Proyecto</button>
+                        <button type="submit" class="btn btn-primary" style="margin-top: 0.5rem;">➕ Agregar Proyecto</button>
                     </form>
                 </div>
             </div>
@@ -1165,16 +1153,16 @@
                 </div>
             </div>
 
-            <!-- Copia de Seguridad y Migración Local -->
+            <!-- Copia de Seguridad -->
             <div class="card backup-card">
                 <div class="card-header">
                     <div class="icon-container">
                         <i class="ph ph-shield-check"></i>
                     </div>
-                    <h3>Copia de Seguridad y Migración</h3>
+                    <h3>Copia de Seguridad (Backup)</h3>
                 </div>
                 <div class="card-body">
-                    <p class="backup-text">Exporta una copia de seguridad consolidada de todos tus datos o importa respaldos existentes de tus aplicaciones anteriores para fusionarlos.</p>
+                    <p class="backup-text">Descarga un respaldo local completo de todas tus secciones o importa un archivo JSON anteriormente guardado.</p>
                     
                     <div class="backup-buttons">
                         <button id="btnExportUnified" class="btn btn-primary">
@@ -1184,15 +1172,6 @@
                             <i class="ph-bold ph-upload-simple"></i> Importar Backup (.json)
                         </label>
                         <input type="file" id="importFileUnified" class="hidden" accept=".json">
-                    </div>
-
-                    <div class="migration-guide">
-                        <h4>Guía de Migración de datos:</h4>
-                        <ul>
-                            <li><strong>Paso 1:</strong> Descarga el backup en tus aplicaciones antiguas (<em>HabitSync</em> o <em>LensTracker</em>).</li>
-                            <li><strong>Paso 2:</strong> Usa el botón <strong>"Importar Backup"</strong> de arriba para subir el archivo JSON de respaldo de cada una.</li>
-                            <li><strong>Paso 3:</strong> El sistema detectará automáticamente el tipo de datos, los cargará e integrará a <strong>LifeCycle</strong> sin perder tu progreso.</li>
-                        </ul>
                     </div>
                 </div>
             </div>
