@@ -112,6 +112,53 @@ app.get('/api/check-reminders', async (req, res) => {
     res.json({ success: true, message: 'Revisión de recordatorios ejecutada.' });
 });
 
+// Endpoint manual de prueba para disparar alerta de robot inmediatamente si está sucio
+app.get('/api/test-robot-reminder', async (req, res) => {
+    if (!supabase) return res.status(500).json({ error: 'Supabase no configurado' });
+    
+    try {
+        const { data: usersData } = await supabase.from('user_data').select('*');
+        const { data: subs } = await supabase.from('push_subscriptions').select('*');
+        
+        if (!usersData || usersData.length === 0) return res.json({ success: true, message: 'No hay usuarios' });
+        if (!subs || subs.length === 0) return res.json({ success: true, message: 'No hay suscripciones' });
+        
+        const subsByUser = {};
+        subs.forEach(s => {
+            if (!subsByUser[s.user_id]) subsByUser[s.user_id] = [];
+            subsByUser[s.user_id].push(s.subscription);
+        });
+        
+        let sentCount = 0;
+        for (const userRow of usersData) {
+            const data = userRow.data || {};
+            let hygieneData = {};
+            if (data.hygiene_tracker_data) {
+                try { hygieneData = JSON.parse(data.hygiene_tracker_data); } catch(e) { continue; }
+            }
+            
+            const robot = hygieneData.robot_cleaner;
+            if (robot && robot.status === 'dirty') {
+                const userSubs = subsByUser[userRow.user_id] || [];
+                const payload = JSON.stringify({
+                    title: '🤖 Robot Aspiradora (Prueba)',
+                    body: 'El robot sigue sucio. ¡Acordate de lavarlo! (Forzado desde test)',
+                    url: '/'
+                });
+                for (const sub of userSubs) {
+                    try {
+                        await webpush.sendNotification(sub, payload);
+                        sentCount++;
+                    } catch (err) {}
+                }
+            }
+        }
+        res.json({ success: true, notificationsSent: sentCount });
+    } catch(err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
 // Fallback to index.html for SPA/PWA routing
 app.get('*', (req, res) => {
     res.sendFile(path.join(__dirname, 'index.html'));
@@ -139,6 +186,9 @@ setInterval(() => {
         console.log(`[Reminders] Iniciando chequeo de alertas diarias para la fecha ${dateStr} a las 23:00 hora de Argentina`);
         checkAndSendDailyReminders();
     }
+
+    // Chequear alertas del robot aspiradora cada 5 minutos
+    checkAndSendRobotReminders();
 }, 5 * 60 * 1000); // Chequea cada 5 minutos
 
 // ==========================================================================
@@ -367,4 +417,92 @@ function getDaysElapsed(dateString) {
     today.setHours(0,0,0,0);
     const diffTime = today - start;
     return Math.floor(diffTime / (1000 * 60 * 60 * 24));
+}
+
+// ==========================================================================
+// Recordatorios del Robot Aspiradora (cada 6 horas)
+// ==========================================================================
+async function checkAndSendRobotReminders() {
+    if (!supabase) return;
+    
+    try {
+        const { data: usersData, error: dbError } = await supabase.from('user_data').select('*');
+        const { data: subs, error: subError } = await supabase.from('push_subscriptions').select('*');
+        
+        if (dbError) throw dbError;
+        if (subError) throw subError;
+        
+        if (!usersData || usersData.length === 0) return;
+        if (!subs || subs.length === 0) return;
+        
+        // Agrupar suscripciones por user_id
+        const subsByUser = {};
+        subs.forEach(s => {
+            if (!subsByUser[s.user_id]) subsByUser[s.user_id] = [];
+            subsByUser[s.user_id].push(s.subscription);
+        });
+        
+        const now = new Date();
+        
+        for (const userRow of usersData) {
+            const userId = userRow.user_id;
+            const data = userRow.data || {};
+            
+            let hygieneData = {};
+            if (data.hygiene_tracker_data) {
+                try {
+                    hygieneData = JSON.parse(data.hygiene_tracker_data);
+                } catch(e) {
+                    continue;
+                }
+            }
+            
+            const robot = hygieneData.robot_cleaner;
+            if (robot && robot.status === 'dirty') {
+                const markedDirtyAt = new Date(robot.marked_dirty_at);
+                const lastNotifiedAt = robot.last_notified_at ? new Date(robot.last_notified_at) : null;
+                
+                const timeToCheck = lastNotifiedAt || markedDirtyAt;
+                const diffMs = now - timeToCheck;
+                const sixHoursMs = 6 * 60 * 60 * 1000;
+                
+                if (diffMs >= sixHoursMs) {
+                    console.log(`[Robot Reminder] Enviando alerta a usuario ${userId} (sucio desde hace ${Math.floor((now - markedDirtyAt) / 60000)} minutos)`);
+                    
+                    const userSubs = subsByUser[userId] || [];
+                    if (userSubs.length === 0) continue;
+                    
+                    const payload = JSON.stringify({
+                        title: '🤖 Robot Aspiradora',
+                        body: 'El robot sigue sucio. ¡Acordate de lavarlo!',
+                        url: '/'
+                    });
+                    
+                    for (const sub of userSubs) {
+                        try {
+                            await webpush.sendNotification(sub, payload);
+                        } catch (err) {
+                            console.error(`[Robot Reminder] Falló enviar push a suscripción:`, err.message);
+                        }
+                    }
+                    
+                    // Actualizar last_notified_at
+                    robot.last_notified_at = now.toISOString();
+                    data.hygiene_tracker_data = JSON.stringify(hygieneData);
+                    
+                    // Guardar de vuelta en Supabase
+                    const { error: updateErr } = await supabase
+                        .from('user_data')
+                        .update({ data: data })
+                        .eq('user_id', userId);
+                        
+                    if (updateErr) {
+                        console.error(`[Robot Reminder] Error al actualizar base de datos para usuario ${userId}:`, updateErr);
+                    }
+                }
+            }
+        }
+    } catch(err) {
+        console.error("Error en checkAndSendRobotReminders:", err);
+    }
 }

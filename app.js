@@ -157,6 +157,7 @@ class HygieneModule {
     constructor(appController) {
         this.app = appController;
         this.currentCategory = 'todos';
+        this.robotCard = document.getElementById('robot-cleaner-card');
         this.data = this.loadData();
         this.container = document.getElementById('tracker-container');
         this.template = document.getElementById('card-template');
@@ -174,6 +175,15 @@ class HygieneModule {
                 parsedData[item.id] = null;
             }
         });
+        
+        // Inicializar datos del robot aspiradora si no existen
+        if (parsedData.robot_cleaner === undefined) {
+            parsedData.robot_cleaner = {
+                status: 'clean',
+                marked_dirty_at: null,
+                last_notified_at: null
+            };
+        }
         return parsedData;
     }
 
@@ -258,6 +268,17 @@ class HygieneModule {
 
     render() {
         if (!this.container) return;
+        
+        // Mostrar u ocultar la tarjeta del robot según la categoría seleccionada
+        if (this.robotCard) {
+            if (this.currentCategory === 'todos' || this.currentCategory === 'tecnologia') {
+                this.robotCard.style.display = 'block';
+                this.renderRobotCard();
+            } else {
+                this.robotCard.style.display = 'none';
+            }
+        }
+
         this.container.innerHTML = '';
 
         const filteredItems = this.currentCategory === 'todos' 
@@ -368,9 +389,129 @@ class HygieneModule {
         });
     }
 
+    renderRobotCard() {
+        if (!this.robotCard) return;
+        
+        // Si no existen datos del robot, los inicializamos
+        if (!this.data.robot_cleaner) {
+            this.data.robot_cleaner = {
+                status: 'clean',
+                marked_dirty_at: null,
+                last_notified_at: null
+            };
+        }
+        
+        const robot = this.data.robot_cleaner;
+        const isDirty = robot.status === 'dirty';
+        
+        // Cambiar borde/estilo según estado
+        if (isDirty) {
+            this.robotCard.style.borderColor = 'rgba(239, 68, 68, 0.4)';
+            this.robotCard.className = 'card status-red';
+            
+            // Calcular cuánto tiempo lleva sucio (aproximado)
+            let timeLabel = '';
+            if (robot.marked_dirty_at) {
+                const elapsedMs = new Date() - new Date(robot.marked_dirty_at);
+                const elapsedHours = Math.floor(elapsedMs / (1000 * 60 * 60));
+                const elapsedMins = Math.floor((elapsedMs % (1000 * 60 * 60)) / (1000 * 60));
+                
+                if (elapsedHours > 0) {
+                    timeLabel = `Hace ${elapsedHours}h ${elapsedMins}m`;
+                } else {
+                    timeLabel = `Hace ${elapsedMins} min`;
+                }
+            }
+            
+            this.robotCard.innerHTML = `
+                <div class="card-header" style="justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px;">
+                    <div style="display: flex; align-items: center; gap: 0.75rem;">
+                        <div class="icon-container" style="background: rgba(239, 68, 68, 0.1); color: #f87171;">
+                            <i class="ph ph-robot" style="font-size: 1.5rem;"></i>
+                        </div>
+                        <div>
+                            <h3 style="margin: 0; font-size: 1.05rem; color: white;">Robot Aspiradora</h3>
+                            <p style="margin: 3px 0 0 0; font-size: 0.75rem; color: #f87171;">Estado: Pendiente de Lavado (${timeLabel})</p>
+                        </div>
+                    </div>
+                    <span class="badge red"><i class="ph ph-warning-circle"></i> Alertas Activas (c/6h)</span>
+                </div>
+                <div class="card-body" style="padding-top: 0; margin-top: 0.5rem;">
+                    <p class="backup-text" style="font-size: 0.85rem; margin-bottom: 1rem; color: var(--text-secondary);">Tu hermano marcó el robot como usado. Lávalo para detener los recordatorios cada 6 horas en tu celular.</p>
+                    <button id="btn-wash-robot" class="btn btn-secondary" style="width: 100%; border-color: rgba(34, 197, 94, 0.3); color: #4ade80;">
+                        <i class="ph ph-sparkle"></i> ✓ Listo, ya lo lavé
+                    </button>
+                </div>
+            `;
+            
+            document.getElementById('btn-wash-robot')?.addEventListener('click', () => {
+                this.markRobotClean();
+            });
+        } else {
+            this.robotCard.style.borderColor = 'rgba(34, 197, 94, 0.2)';
+            this.robotCard.className = 'card status-green';
+            
+            this.robotCard.innerHTML = `
+                <div class="card-header" style="justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px;">
+                    <div style="display: flex; align-items: center; gap: 0.75rem;">
+                        <div class="icon-container" style="background: rgba(34, 197, 94, 0.1); color: #4ade80;">
+                            <i class="ph ph-robot" style="font-size: 1.5rem;"></i>
+                        </div>
+                        <div>
+                            <h3 style="margin: 0; font-size: 1.05rem; color: white;">Robot Aspiradora</h3>
+                            <p style="margin: 3px 0 0 0; font-size: 0.75rem; color: #4ade80;">Estado: Limpio & Listo</p>
+                        </div>
+                    </div>
+                    <span class="badge green"><i class="ph ph-check-circle"></i> Al día</span>
+                </div>
+                <div class="card-body" style="padding-top: 0; margin-top: 0.5rem;">
+                    <p class="backup-text" style="font-size: 0.85rem; margin-bottom: 1rem; color: var(--text-secondary);">El robot está limpio. Cuando tu hermano lo use, márcalo como sucio para iniciar las alertas.</p>
+                    <button id="btn-dirty-robot" class="btn btn-secondary" style="width: 100%;">
+                        <i class="ph ph-warning"></i> Marcar como Sucio (Iniciar Alertas)
+                    </button>
+                </div>
+            `;
+            
+            document.getElementById('btn-dirty-robot')?.addEventListener('click', () => {
+                this.markRobotDirty();
+            });
+        }
+    }
+
+    markRobotDirty() {
+        if (navigator.vibrate) navigator.vibrate(50);
+        this.data.robot_cleaner = {
+            status: 'dirty',
+            marked_dirty_at: new Date().toISOString(),
+            last_notified_at: new Date().toISOString() // Seteado a la hora actual para que la primera alerta ocurra 6 horas después
+        };
+        this.saveData();
+        this.render();
+        this.app.auth?.syncToCloud(false).catch(() => {});
+    }
+
+    markRobotClean() {
+        if (navigator.vibrate) navigator.vibrate(50);
+        this.data.robot_cleaner = {
+            status: 'clean',
+            marked_dirty_at: null,
+            last_notified_at: null
+        };
+        this.saveData();
+        this.render();
+        this.app.auth?.syncToCloud(false).catch(() => {});
+    }
+
     init() {
         this.initTabs();
         this.render();
+        
+        // Timer de actualización para refrescar el "hace X min" dinámicamente si el robot está sucio
+        setInterval(() => {
+            if (this.data?.robot_cleaner?.status === 'dirty' && this.currentCategory === 'todos') {
+                this.renderRobotCard();
+            }
+        }, 30000); // cada 30 segundos
     }
 }
 
