@@ -2013,6 +2013,13 @@ class GymModule {
             if (!this.supplements.vit_d_history) this.supplements.vit_d_history = [];
             if (!this.supplements.vit_d_days_interval) this.supplements.vit_d_days_interval = 45;
             if (!this.supplements.painkillers_history) this.supplements.painkillers_history = [];
+            if (!this.supplements.custom_reminders) {
+                this.supplements.custom_reminders = {
+                    creatine: { enabled: true, days: [0, 1, 2, 3, 4, 5, 6], time: '23:00' },
+                    salmon: { enabled: true, days: [0], time: '17:00' },
+                    neck: { enabled: true, days: [5, 6], time: '23:30' }
+                };
+            }
 
             const weight = localStorage.getItem('gym_weight');
             if (weight) this.weight = JSON.parse(weight);
@@ -2464,6 +2471,44 @@ class GymModule {
                 if (btnPainLogToggle) btnPainLogToggle.innerHTML = '<i class="ph ph-plus"></i> Registrar Toma';
             });
         }
+
+        // Custom reminders day buttons toggles
+        const dayButtons = document.querySelectorAll('.day-selectors .day-btn');
+        dayButtons.forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                e.preventDefault();
+                btn.classList.toggle('active');
+            });
+        });
+
+        // Custom reminders save button
+        const btnSaveReminders = document.getElementById('btn-save-reminders');
+        if (btnSaveReminders) {
+            btnSaveReminders.addEventListener('click', (e) => {
+                e.preventDefault();
+                if (navigator.vibrate) navigator.vibrate(50);
+                
+                const keys = ['creatine', 'salmon', 'neck'];
+                keys.forEach(k => {
+                    const enabled = document.getElementById(`reminder-${k}-enabled`).checked;
+                    const time = document.getElementById(`reminder-${k}-time`).value || '00:00';
+                    
+                    const days = [];
+                    const daysContainer = document.getElementById(`reminder-${k}-days`);
+                    if (daysContainer) {
+                        daysContainer.querySelectorAll('.day-btn.active').forEach(btn => {
+                            days.push(parseInt(btn.dataset.day));
+                        });
+                    }
+                    
+                    this.supplements.custom_reminders[k] = { enabled, days, time };
+                });
+                
+                this.saveData('gym_supplements');
+                alert('¡Recordatorios guardados con éxito!');
+                this.app.auth?.syncToCloud(false).catch(() => {});
+            });
+        }
     }
 
     render() {
@@ -2480,7 +2525,34 @@ class GymModule {
             this.renderSupplements();
             this.renderPainkillers();
             this.renderWeight();
+        } else if (tab === 'reminders') {
+            this.renderReminders();
         }
+    }
+
+    renderReminders() {
+        const reminders = this.supplements.custom_reminders;
+        if (!reminders) return;
+
+        const keys = ['creatine', 'salmon', 'neck'];
+        keys.forEach(k => {
+            const config = reminders[k];
+            if (!config) return;
+
+            const chk = document.getElementById(`reminder-${k}-enabled`);
+            if (chk) chk.checked = config.enabled;
+
+            const timeInput = document.getElementById(`reminder-${k}-time`);
+            if (timeInput) timeInput.value = config.time || '';
+
+            const daysContainer = document.getElementById(`reminder-${k}-days`);
+            if (daysContainer) {
+                daysContainer.querySelectorAll('.day-btn').forEach(btn => {
+                    const dayVal = parseInt(btn.dataset.day);
+                    btn.classList.toggle('active', (config.days || []).includes(dayVal));
+                });
+            }
+        });
     }
 
     renderRecords() {

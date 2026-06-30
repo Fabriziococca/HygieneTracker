@@ -1818,3 +1818,29 @@ textarea:focus {
     color: var(--text-primary) !important;
 }
 
+/* Botones para seleccionar días de la semana */
+.day-btn {
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid var(--surface-border);
+    color: var(--text-secondary);
+    padding: 8px 12px;
+    border-radius: 6px;
+    font-size: 0.85rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    min-width: 38px;
+    text-align: center;
+}
+
+.day-btn.active {
+    background: var(--primary-color);
+    border-color: var(--primary-color);
+    color: white;
+}
+
+.day-btn:hover {
+    border-color: var(--primary-color);
+    color: white;
+}
+

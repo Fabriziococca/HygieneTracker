@@ -173,42 +173,26 @@ app.listen(PORT, () => {
 // Tarea Programada: Chequeo Diario a las 23:00 Argentina Time (UTC-3)
 // ==========================================================================
 let lastNotifiedDate = '';
-let lastSalmonNotifiedDate = '';
-let lastNeckNotifiedDate = '';
 
 setInterval(() => {
     const now = new Date();
     // Convertir la hora a la zona horaria de Argentina (Buenos Aires)
     const argTime = new Date(now.toLocaleString("en-US", { timeZone: "America/Argentina/Buenos_Aires" }));
     const hour = argTime.getHours();
-    const minutes = argTime.getMinutes();
-    const dayOfWeek = argTime.getDay(); // 0 = Domingo, 5 = Viernes, 6 = Sábado
     const dateStr = argTime.toISOString().split('T')[0];
 
-    // Chequeo diario a las 23:00
+    // Chequeo diario a las 23:00 (Higiene, Lentes, Cuidado Corporal)
     if (hour === 23 && lastNotifiedDate !== dateStr) {
         lastNotifiedDate = dateStr;
         console.log(`[Reminders] Iniciando chequeo de alertas diarias para la fecha ${dateStr} a las 23:00 hora de Argentina`);
         checkAndSendDailyReminders();
-        
-        // Enviar recordatorio de creatina diario a las 23:00
-        sendCreatineReminder();
-    }
-
-    // Chequear recordatorio semanal de salmón (Domingos a las 17:00)
-    if (dayOfWeek === 0 && hour === 17 && lastSalmonNotifiedDate !== dateStr) {
-        lastSalmonNotifiedDate = dateStr;
-        sendSalmonReminder();
-    }
-
-    // Chequear recordatorio semanal de cuello (Viernes y Sábados a las 23:30)
-    if ((dayOfWeek === 5 || dayOfWeek === 6) && hour === 23 && minutes >= 30 && minutes < 35 && lastNeckNotifiedDate !== dateStr) {
-        lastNeckNotifiedDate = dateStr;
-        sendNeckReminder();
     }
 
     // Chequear alertas del robot aspiradora cada 5 minutos
     checkAndSendRobotReminders();
+
+    // Chequear recordatorios personalizados dinámicos cada 5 minutos
+    checkAndSendCustomReminders();
 }, 5 * 60 * 1000); // Chequea cada 5 minutos
 
 // ==========================================================================
@@ -546,80 +530,108 @@ async function checkAndSendRobotReminders() {
 }
 
 // ==========================================================================
-// Funciones Auxiliares para Recordatorios Dedicados
+// Tareas Dinámicas y Recordatorios Personalizados
 // ==========================================================================
-async function sendCreatineReminder() {
+async function checkAndSendCustomReminders() {
     if (!supabase) return;
     try {
-        const { data: subs } = await supabase.from('push_subscriptions').select('*');
-        if (!subs || subs.length === 0) return;
-        
-        const payload = JSON.stringify({
-            title: '💪 Creatina',
-            body: '¡No te olvides de tomar la creatina de hoy!',
-            url: '/'
-        });
-        
-        console.log(`[Creatina] Enviando recordatorio diario a ${subs.length} dispositivos.`);
-        for (const sub of subs) {
-            try {
-                await webpush.sendNotification(sub.subscription, payload);
-            } catch (err) {
-                console.error("Error sending creatine reminder:", err.message);
-            }
-        }
-    } catch(err) {
-        console.error("Error in sendCreatineReminder:", err);
-    }
-}
+        const now = new Date();
+        const argTime = new Date(now.toLocaleString("en-US", { timeZone: "America/Argentina/Buenos_Aires" }));
+        const hour = argTime.getHours();
+        const minutes = argTime.getMinutes();
+        const dayOfWeek = argTime.getDay(); // 0 = Domingo, etc.
+        const dateStr = argTime.toISOString().split('T')[0];
 
-async function sendSalmonReminder() {
-    if (!supabase) return;
-    try {
-        const { data: subs } = await supabase.from('push_subscriptions').select('*');
-        if (!subs || subs.length === 0) return;
+        // Obtener usuarios y sus suscripciones
+        const { data: usersData, error: dbError } = await supabase.from('user_data').select('*');
+        const { data: subs, error: subError } = await supabase.from('push_subscriptions').select('*');
         
-        const payload = JSON.stringify({
-            title: '🐟 Salmón & Omega 3',
-            body: 'Recordá sacar el salmón para mañana lunes para comer Omega 3.',
-            url: '/'
-        });
+        if (dbError || subError || !usersData || !subs) return;
         
-        console.log(`[Salmón] Enviando recordatorio semanal a ${subs.length} dispositivos.`);
+        // Agrupar suscripciones por user_id
+        const subsByUser = {};
         for (const sub of subs) {
-            try {
-                await webpush.sendNotification(sub.subscription, payload);
-            } catch (err) {
-                console.error("Error sending salmon reminder:", err.message);
-            }
+            if (!subsByUser[sub.user_id]) subsByUser[sub.user_id] = [];
+            subsByUser[sub.user_id].push(sub.subscription);
         }
-    } catch(err) {
-        console.error("Error in sendSalmonReminder:", err);
-    }
-}
 
-async function sendNeckReminder() {
-    if (!supabase) return;
-    try {
-        const { data: subs } = await supabase.from('push_subscriptions').select('*');
-        if (!subs || subs.length === 0) return;
-        
-        const payload = JSON.stringify({
-            title: '💪 Entrenamiento de Cuello',
-            body: 'Recordá entrenar el cuello hoy (1 vez por semana).',
-            url: '/'
-        });
-        
-        console.log(`[Cuello] Enviando recordatorio semanal a ${subs.length} dispositivos.`);
-        for (const sub of subs) {
-            try {
-                await webpush.sendNotification(sub.subscription, payload);
-            } catch (err) {
-                console.error("Error sending neck reminder:", err.message);
+        for (const userRow of usersData) {
+            const userId = userRow.user_id;
+            const data = userRow.data || {};
+            
+            // Leer configuración de gym_supplements
+            let supplements = {};
+            if (data.gym_supplements) {
+                try {
+                    supplements = JSON.parse(data.gym_supplements);
+                } catch(e) {
+                    continue;
+                }
+            }
+            
+            const customReminders = supplements.custom_reminders;
+            if (!customReminders) continue;
+
+            const userSubs = subsByUser[userId] || [];
+            if (userSubs.length === 0) continue;
+
+            // Tipos de recordatorios dinámicos y sus textos por defecto
+            const reminderTypes = [
+                { key: 'creatine', title: '💪 Creatina', defaultBody: '¡No te olvides de tomar la creatina de hoy!' },
+                { key: 'salmon', title: '🐟 Salmón & Omega 3', defaultBody: 'Recordá sacar el salmón para mañana lunes para comer Omega 3.' },
+                { key: 'neck', title: '💪 Entrenamiento de Cuello', defaultBody: 'Recordá entrenar el cuello hoy (1 vez por semana).' }
+            ];
+
+            if (!data.custom_reminders_log) {
+                data.custom_reminders_log = {};
+            }
+
+            let dataChanged = false;
+
+            for (const rInfo of reminderTypes) {
+                const reminder = customReminders[rInfo.key];
+                if (reminder && reminder.enabled) {
+                    const days = reminder.days || [];
+                    const time = reminder.time || '';
+                    if (days.includes(dayOfWeek) && time) {
+                        const [remHour, remMin] = time.split(':').map(Number);
+                        // Tolerancia de 5 minutos porque el cron corre cada 5 minutos
+                        if (hour === remHour && minutes >= remMin && minutes < remMin + 5) {
+                            const lastSentDate = data.custom_reminders_log[rInfo.key];
+                            if (lastSentDate !== dateStr) {
+                                console.log(`[Custom Reminder] Enviando push flotante ${rInfo.key} a usuario ${userId}`);
+                                const payload = JSON.stringify({
+                                    title: rInfo.title,
+                                    body: rInfo.defaultBody,
+                                    url: '/'
+                                });
+
+                                for (const sub of userSubs) {
+                                    try {
+                                        await webpush.sendNotification(sub, payload);
+                                    } catch (err) {
+                                        console.error(`[Custom Reminder] Falló enviar push de ${rInfo.key}:`, err.message);
+                                    }
+                                }
+
+                                data.custom_reminders_log[rInfo.key] = dateStr;
+                                dataChanged = true;
+                            }
+                        }
+                    }
+                }
+            }
+
+            if (dataChanged) {
+                // Guardar actualización de log en Supabase
+                await supabase
+                    .from('user_data')
+                    .update({ data: data })
+                    .eq('user_id', userId);
             }
         }
     } catch(err) {
-        console.error("Error in sendNeckReminder:", err);
+        console.error("Error en checkAndSendCustomReminders:", err);
     }
 }
 
