@@ -140,8 +140,8 @@ const checkAdminToken = (req, res, next) => {
 
 // Endpoint manual para disparar la revisión de recordatorios
 app.get('/api/check-reminders', checkAdminToken, async (req, res) => {
-    await checkAndSendDailyReminders();
-    res.json({ success: true, message: 'Revisión de recordatorios ejecutada.' });
+    await checkAndSendAllAlerts(true);
+    res.json({ success: true, message: 'Revisión de recordatorios ejecutada (forzada para pruebas).' });
 });
 
 // Endpoint manual de prueba para disparar alerta de robot inmediatamente si está sucio
@@ -208,33 +208,32 @@ let lastNotifiedDate = '';
 
 setInterval(() => {
     const now = new Date();
-    // Convertir la hora a la zona horaria de Argentina (Buenos Aires)
-    const argTime = new Date(now.toLocaleString("en-US", { timeZone: "America/Argentina/Buenos_Aires" }));
-    const hour = argTime.getHours();
+    // Convertir a la hora de Argentina (UTC-3) restando 3 horas al tiempo UTC
+    const argTime = new Date(now.getTime() - (3 * 60 * 60 * 1000));
+    const hour = argTime.getUTCHours();
     const dateStr = argTime.toISOString().split('T')[0];
-
-    // Chequeo diario a las 23:00 (Higiene, Lentes, Cuidado Corporal)
-    if (hour === 23 && lastNotifiedDate !== dateStr) {
-        lastNotifiedDate = dateStr;
-        console.log(`[Reminders] Iniciando chequeo de alertas diarias para la fecha ${dateStr} a las 23:00 hora de Argentina`);
-        checkAndSendDailyReminders();
-    }
 
     // Chequear alertas del robot aspiradora cada 5 minutos
     checkAndSendRobotReminders();
 
-    // Chequear recordatorios personalizados dinámicos cada 5 minutos
-    checkAndSendCustomReminders();
-}, 5 * 60 * 1000); // Chequea cada 5 minutos
+    // Chequear todas las alertas unificadas y dinámicas cada 5 minutos
+    checkAndSendAllAlerts();
+}, 5 * 60 * 1000); 
 
 // ==========================================================================
-// Función de Análisis de Datos y Envío de Alertas
+// Motor Unificado y Dinámico de Alertas (Gestor de Alertas)
 // ==========================================================================
-async function checkAndSendDailyReminders() {
+async function checkAndSendAllAlerts(forceAll = false) {
     if (!supabase) return;
-    
     try {
-        console.log("[Reminders] Consultando datos de Supabase...");
+        const now = new Date();
+        // Convertir a la hora de Argentina (UTC-3) restando 3 horas al tiempo UTC
+        const argTime = new Date(now.getTime() - (3 * 60 * 60 * 1000));
+        const hour = argTime.getUTCHours();
+        const minutes = argTime.getUTCMinutes();
+        const dayOfWeek = argTime.getUTCDay(); // 0 = Domingo, 1 = Lunes, etc.
+        const dateStr = argTime.toISOString().split('T')[0];
+
         const { data: usersData, error: dbError } = await supabase.from('user_data').select('*');
         const { data: subs, error: subError } = await supabase.from('push_subscriptions').select('*');
 
@@ -253,8 +252,8 @@ async function checkAndSendDailyReminders() {
 
         for (const userRow of usersData) {
             const userId = userRow.user_id;
-            const userSubscriptions = subsByUser[userId];
-            if (!userSubscriptions || userSubscriptions.length === 0) continue;
+            const userSubs = subsByUser[userId] || [];
+            if (userSubs.length === 0) continue;
 
             const rawData = userRow.data || {};
             // Parsear campos si vienen en formato string JSON
@@ -268,219 +267,318 @@ async function checkAndSendDailyReminders() {
                 }
             });
 
-            const alerts = [];
-
-            // 1. HIGIENE
-            const hygieneData = data.hygiene_tracker_data || {};
-            const itemsConfig = [
-                { id: 'esponja_africana', name: 'Esponja Africana', limit: 30, type: 'wash' },
-                { id: 'toalla_mano', name: 'Toalla de Mano', limit: 4, type: 'wash' },
-                { id: 'toalla_cuerpo', name: 'Toalla de Cuerpo', limit: 8, type: 'wash' },
-                { id: 'sabanas', name: 'Sábanas (Completas)', limit: 8, type: 'wash' },
-                { id: 'funda_almohada', name: 'Funda de Almohada', limit: 4, type: 'wash' },
-                { id: 'cepillo_dientes', name: 'Cepillo de Dientes', limit: 90, type: 'change' },
-                { id: 'celular', name: 'Celular (Funda y Pantalla)', limit: 7, type: 'clean' },
-                { id: 'computadora', name: 'Computadora (Teclado y Ext.)', limit: 15, type: 'clean' },
-                { id: 'mouse', name: 'Mouse (Limpieza)', limit: 21, type: 'clean' },
-                { id: 'auriculares', name: 'Auriculares (Limpieza)', limit: 45, type: 'clean' },
-                { id: 'pad_cepillado', name: 'Pad XL (Cepillado en seco)', limit: 21, type: 'brush' },
-                { id: 'pad_lavado', name: 'Pad XL (Lavado a fondo)', limit: 90, type: 'wash' }
-            ];
-
-            itemsConfig.forEach(item => {
-                const dateStr = hygieneData[item.id];
-                if (dateStr) {
-                    const elapsed = getDaysElapsed(dateStr);
-                    if (elapsed !== null && elapsed >= item.limit) {
-                        const actionText = item.type === 'wash' ? 'lavarla' : item.type === 'change' ? 'cambiarlo' : item.type === 'brush' ? 'cepillarlo' : 'limpiarlo';
-                        alerts.push(`🧼 ${item.name}: Pasaron ${elapsed} días, sugerimos ${actionText}.`);
-                    }
-                }
-            });
-
-            // 2. CUIDADO
-            const groomingData = data.groomingData_v2 || {};
-            // Barba
-            const barbaHistory = groomingData['barba'] || [];
-            if (barbaHistory.length > 0) {
-                const elapsed = getDaysElapsed(barbaHistory[0]);
-                if (elapsed !== null && elapsed >= 4) {
-                    alerts.push(`🧔 Barba: Sugerencia de afeitado (pasaron ${elapsed} días).`);
-                }
-            }
-            // Hoja Gillette
-            const gilletteHistory = groomingData['hoja_gillette'] || [];
-            if (gilletteHistory.length > 0) {
-                const elapsed = getDaysElapsed(gilletteHistory[0]);
-                if (elapsed !== null && elapsed > 40) {
-                    alerts.push(`🪒 Hoja Gillette: Sugerimos cambiarla (pasaron ${elapsed} días).`);
-                }
+            // Cargar o inicializar alerts_config
+            let alertsConfig = {};
+            if (data.alerts_config) {
+                try {
+                    alertsConfig = typeof data.alerts_config === 'string' ? JSON.parse(data.alerts_config) : data.alerts_config;
+                } catch(e) {}
             }
 
-            // Pelo
-            const peloHistory = groomingData['pelo'] || [];
-            if (peloHistory.length > 0) {
-                const elapsed = getDaysElapsed(peloHistory[0]);
-                if (elapsed !== null && elapsed >= 20) {
-                    alerts.push(`💇 Pelo: Ya pasaron ${elapsed} días, te deberías cortar el pelo.`);
+            // Migrar automáticamente si no existe alerts_config o está vacío
+            if (Object.keys(alertsConfig).length === 0) {
+                let gymSupplements = {};
+                if (data.gym_supplements) {
+                    try { gymSupplements = typeof data.gym_supplements === 'string' ? JSON.parse(data.gym_supplements) : data.gym_supplements; } catch(e) {}
                 }
-            }
-
-            // Axilas
-            const axilasHistory = groomingData['axilas'] || [];
-            if (axilasHistory.length > 0) {
-                const elapsed = getDaysElapsed(axilasHistory[0]);
-                if (elapsed !== null && elapsed >= 30) {
-                    alerts.push(`🪒 Axilas: Tiempo de rebajar el vello (hace ${elapsed} días).`);
-                }
-            }
-
-            // 3. LENTES
-            const lensLimits = {
-                lenses: { name: 'Lentes en uso', limit: 60, action: 'cambiarlos' },
-                solution: { name: 'Solución abierta', limit: 90, action: 'cambiarla' },
-                case: { name: 'Estuche de lentes', limit: 90, action: 'cambiarlo' },
-                systane: { name: 'Gotas Systane', limit: 90, action: 'cambiarlas' },
-                clothWash: { name: 'Gamuza (Lavado)', limit: 15, action: 'lavarla' },
-                clothChange: { name: 'Gamuza (Cambio)', limit: 270, action: 'cambiarla' }
-            };
-
-            Object.keys(lensLimits).forEach(key => {
-                const limitInfo = lensLimits[key];
-                const dateKey = key === 'lenses' ? 'lensDate' : key === 'solution' ? 'solutionDate' : key === 'case' ? 'caseDate' : key === 'systane' ? 'systaneDate' : key === 'clothWash' ? 'clothWashDate' : 'clothChangeDate';
-                const dateStr = data[dateKey];
-                if (dateStr) {
-                    const elapsed = getDaysElapsed(dateStr);
-                    if (elapsed !== null && elapsed >= limitInfo.limit) {
-                        alerts.push(`👁️ Lentes (${limitInfo.name}): Pasaron ${elapsed} días, sugerimos ${limitInfo.action}.`);
-                    }
-                }
-            });
-
-            // 4. SALUD (Dentista)
-            const healthData = data.health_medical_data || {};
-            const dentista = healthData.dentista || {};
-            if (dentista.lastVisit) {
-                const elapsed = getDaysElapsed(dentista.lastVisit);
-                const limit = (dentista.frequencyMonths || 6) * 30;
-                if (elapsed !== null && elapsed >= limit) {
-                    alerts.push(`🩺 Salud (Dentista): Sugerimos realizar tu visita periódica (pasaron ${elapsed} días).`);
-                }
-            }
-
-            // 5. VEHÍCULO
-            const currentOdo = Number(data.vehicle_odometer) || 0;
-            const maintenanceLog = data.vehicle_maintenance_log || [];
-
-            const lastOil = maintenanceLog.find(m => m.type === 'Aceite y Filtros');
-            if (lastOil) {
-                const remainingKm = (lastOil.km + 10000) - currentOdo;
-                const daysElapsed = getDaysElapsed(lastOil.date);
-                const remainingDays = 365 - (daysElapsed || 0);
-                if (remainingKm <= 0 || remainingDays <= 0) {
-                    alerts.push(`🚗 Vehículo: Mantenimiento urgente de Aceite y Filtros sugerido.`);
-                }
-            }
-
-            const lastAlign = maintenanceLog.find(m => m.type === 'Alineación & Balanceo');
-            if (lastAlign) {
-                const remainingKm = (lastAlign.km + 10000) - currentOdo;
-                if (remainingKm <= 0) {
-                    alerts.push(`🚗 Vehículo: Alineación & Balanceo vencido.`);
-                }
-            }
-
-            const lastRot = maintenanceLog.find(m => m.type === 'Rotación de Neumáticos');
-            if (lastRot) {
-                const remainingKm = (lastRot.km + 10000) - currentOdo;
-                if (remainingKm <= 0) {
-                    alerts.push(`🚗 Vehículo: Rotación de Neumáticos vencida.`);
-                }
-            }
-
-            const lastReplace = maintenanceLog.find(m => m.type === 'Reemplazo de Neumáticos');
-            if (lastReplace) {
-                const remainingKm = (lastReplace.km + 60000) - currentOdo;
-                if (remainingKm <= 0) {
-                    alerts.push(`🚗 Vehículo: Cambio de Neumáticos vencido.`);
-                }
-            }
-
-            // 6. GIMNASIO (Nutrición - Vitamina D)
-            const gymSupplements = data.gym_supplements || {};
-            const vitDHistory = gymSupplements.vit_d_history || [];
-            if (vitDHistory.length > 0) {
-                const lastTake = new Date(vitDHistory[0].date);
-                const interval = gymSupplements.vit_d_days_interval || 30;
-                const nextTake = new Date(lastTake.getTime() + interval * 24 * 60 * 60 * 1000);
-                const remainingDays = Math.ceil((nextTake - new Date()) / 86400000);
-                if (remainingDays <= 0) {
-                    alerts.push(`💊 Nutrición (Vitamina D): Debes tomar tu suplemento ahora.`);
-                }
-            }
-
-            // 7. PROYECTOS
-            const projects = data.projectPulseData || [];
-            projects.forEach(p => {
-                if (p.timerStart || p.accepted) {
-                    const acceptedDate = new Date(p.accepted);
-                    const totalDays = p.days || 1;
-                    const elapsedMs = new Date() - acceptedDate;
-                    const elapsedDays = elapsedMs / (1000 * 60 * 60 * 24);
-                    const percentage = elapsedDays / totalDays;
-                    const daysLeft = Math.ceil(totalDays - elapsedDays);
-
-                    if (percentage >= 0.90 || daysLeft <= 1) {
-                        alerts.push(`⏳ Proyecto '${p.project}' de '${p.client}' vence urgente en ${daysLeft} días.`);
-                    } else if (percentage >= 0.75) {
-                        alerts.push(`⏳ Proyecto '${p.project}' de '${p.client}' vence pronto en ${daysLeft} días.`);
-                    } else if (percentage >= 0.50) {
-                        alerts.push(`⏳ Proyecto '${p.project}' de '${p.client}' vence en ${daysLeft} días.`);
-                    }
-                }
-            });
-
-            // 8. SUSCRIPCIÓN WORKANA
-            const sub = data.projectPulseSubscription;
-            if (sub && sub.startDate && sub.cycle) {
-                const start = new Date(sub.startDate + 'T12:00:00');
-                const expiry = new Date(start);
-                expiry.setMonth(expiry.getMonth() + parseInt(sub.cycle));
+                const oldReminders = gymSupplements.custom_reminders || {};
                 
-                const today = new Date();
-                today.setHours(0,0,0,0);
-                const expiryDay = new Date(expiry);
-                expiryDay.setHours(0,0,0,0);
-                const diffTime = expiryDay - today;
-                const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
-                
-                if (diffDays <= 7 && diffDays > 2) {
-                    alerts.push(`💳 Suscripción Workana: Che, en ${diffDays} días tu suscripción va a vencer, acordate de renovarla o de hacer algo al respecto.`);
-                } else if (diffDays <= 2) {
-                    alerts.push(`💳 Suscripción Workana: Vencimiento crítico en ${diffDays} días (${expiry.toLocaleDateString('es-AR')}).`);
-                }
-            }
+                // Valores iniciales y migrados
+                const defaultTimes = {
+                    creatine: { enabled: oldReminders.creatine?.enabled ?? true, time: oldReminders.creatine?.time || '23:00', days: oldReminders.creatine?.days || [1,2,3,4,5,6,0] },
+                    salmon: { enabled: oldReminders.salmon?.enabled ?? true, time: oldReminders.salmon?.time || '17:00', days: oldReminders.salmon?.days || [0] },
+                    neck: { enabled: oldReminders.neck?.enabled ?? true, time: oldReminders.neck?.time || '23:30', days: oldReminders.neck?.days || [5,6] }
+                };
 
-            // Enviar alerta agrupada si existen notificaciones
-            if (alerts.length > 0) {
-                const payload = JSON.stringify({
-                    title: '⚠️ LifeCycle: Pendientes urgentes',
-                    body: alerts.slice(0, 3).join('\n') + (alerts.length > 3 ? `\n...y ${alerts.length - 3} recordatorios más.` : ''),
-                    url: '/'
+                const definitions = [
+                    'esponja_africana', 'toalla_mano', 'toalla_cuerpo', 'sabanas', 'funda_almohada', 'alfombra_bano',
+                    'cepillo_dientes', 'dentista', 'pelo', 'barba', 'axilas', 'lenses_droplets', 'lenses_case',
+                    'lenses_solution', 'lenses_replace', 'glasses_cloth_wash', 'glasses_cloth_replace', 'vehicle_oil',
+                    'vehicle_align', 'vehicle_rot', 'vehicle_replace', 'vitamina_d', 'robot', 'workana'
+                ];
+
+                definitions.forEach(k => {
+                    alertsConfig[k] = { enabled: true, time: '23:00', days: [] };
                 });
+                Object.keys(defaultTimes).forEach(k => {
+                    alertsConfig[k] = defaultTimes[k];
+                });
+            }
 
-                console.log(`[Reminders] Enviando push a ${userSubscriptions.length} suscripciones para el usuario ${userId}`);
-                for (const sub of userSubscriptions) {
-                    try {
-                        await webpush.sendNotification(sub, payload);
-                    } catch (pushErr) {
-                        console.error(`Error de envío push a ${userId}:`, pushErr.message);
+            // Inicializar log de envíos diarios si no existe
+            if (!data.alerts_sent_log) {
+                data.alerts_sent_log = {};
+            }
+
+            let dataChanged = false;
+
+            // Procesar cada alerta definida
+            for (const key of Object.keys(alertsConfig)) {
+                const conf = alertsConfig[key];
+                if (!conf || !conf.enabled) continue;
+
+                // Verificar coincidencia de horario (con tolerancia de 5 minutos)
+                const [remHour, remMin] = (conf.time || '23:00').split(':').map(Number);
+                const isTimeMatch = hour === remHour && minutes >= remMin && minutes < remMin + 5;
+
+                if (forceAll || isTimeMatch) {
+                    // Verificar si ya fue enviada hoy para evitar spam en el mismo día
+                    if (!forceAll && data.alerts_sent_log[key] === dateStr) continue;
+
+                    // Si es una alerta periódica/recurrente, verificar día de la semana
+                    const isRecurring = ['creatine', 'salmon', 'neck'].includes(key);
+                    if (isRecurring && !forceAll && (!conf.days || !conf.days.includes(dayOfWeek))) continue;
+
+                    let shouldNotify = false;
+                    let title = '';
+                    let body = '';
+
+                    const hygieneData = data.hygiene_tracker_data || {};
+                    const groomingData = data.groomingData_v2 || {};
+                    const healthData = data.health_medical_data || {};
+                    const dentista = healthData.dentista || {};
+                    const maintenanceLog = data.vehicle_maintenance_log || [];
+                    const currentOdo = Number(data.vehicle_odometer) || 0;
+                    const gymSupplements = data.gym_supplements || {};
+
+                    switch(key) {
+                        // Higiene
+                        case 'esponja_africana':
+                            if (hygieneData.esponja_africana) {
+                                const elapsed = getDaysElapsed(hygieneData.esponja_africana);
+                                if (elapsed >= 30) { shouldNotify = true; title = '🧼 Esponja Africana'; body = `Pasaron ${elapsed} días, recordá lavarla.`; }
+                            }
+                            break;
+                        case 'toalla_mano':
+                            if (hygieneData.toalla_mano) {
+                                const elapsed = getDaysElapsed(hygieneData.toalla_mano);
+                                if (elapsed >= 4) { shouldNotify = true; title = '🧼 Toalla de Mano'; body = `Pasaron ${elapsed} días, recordá lavarla.`; }
+                            }
+                            break;
+                        case 'toalla_cuerpo':
+                            if (hygieneData.toalla_cuerpo) {
+                                const elapsed = getDaysElapsed(hygieneData.toalla_cuerpo);
+                                if (elapsed >= 8) { shouldNotify = true; title = '🧼 Toalla de Cuerpo'; body = `Pasaron ${elapsed} días, recordá lavarla.`; }
+                            }
+                            break;
+                        case 'sabanas':
+                            if (hygieneData.sabanas) {
+                                const elapsed = getDaysElapsed(hygieneData.sabanas);
+                                if (elapsed >= 8) { shouldNotify = true; title = '🧼 Sábanas'; body = `Pasaron ${elapsed} días, recordá lavarlas.`; }
+                            }
+                            break;
+                        case 'funda_almohada':
+                            if (hygieneData.funda_almohada) {
+                                const elapsed = getDaysElapsed(hygieneData.funda_almohada);
+                                if (elapsed >= 4) { shouldNotify = true; title = '🧼 Funda de Almohada'; body = `Pasaron ${elapsed} días, recordá lavarla.`; }
+                            }
+                            break;
+                        case 'alfombra_bano':
+                            if (hygieneData.alfombra_bano) {
+                                const elapsed = getDaysElapsed(hygieneData.alfombra_bano);
+                                if (elapsed >= 15) { shouldNotify = true; title = '🧼 Alfombra de Baño'; body = `Pasaron ${elapsed} días, recordá lavarla.`; }
+                            }
+                            break;
+                        case 'cepillo_dientes':
+                            if (hygieneData.cepillo_dientes) {
+                                const elapsed = getDaysElapsed(hygieneData.cepillo_dientes);
+                                if (elapsed >= 90) { shouldNotify = true; title = '🪥 Cepillo de Dientes'; body = `Pasaron ${elapsed} días, recordá cambiarlo.`; }
+                            }
+                            break;
+                        case 'dentista':
+                            if (dentista.lastVisit) {
+                                const elapsed = getDaysElapsed(dentista.lastVisit);
+                                const limit = (dentista.frequencyMonths || 6) * 30;
+                                if (elapsed >= limit) { shouldNotify = true; title = '🩺 Control Dentista'; body = `Pasaron ${elapsed} días, sugerimos realizar tu visita periódica.`; }
+                            }
+                            break;
+
+                        // Cuidado Corporal
+                        case 'pelo':
+                            const peloHistory = groomingData.pelo || [];
+                            if (peloHistory.length > 0) {
+                                const elapsed = getDaysElapsed(peloHistory[0]);
+                                if (elapsed >= 20) { shouldNotify = true; title = '💇 Corte de Pelo'; body = `Ya pasaron ${elapsed} días, te deberías cortar el pelo.`; }
+                            }
+                            break;
+                        case 'barba':
+                            const barbaHistory = groomingData.barba || [];
+                            if (barbaHistory.length > 0) {
+                                const elapsed = getDaysElapsed(barbaHistory[0]);
+                                if (elapsed >= 4) { shouldNotify = true; title = '🧔 Afeitado de Barba'; body = `Sugerencia de afeitado (pasaron ${elapsed} días).`; }
+                            }
+                            break;
+                        case 'axilas':
+                            const axilasHistory = groomingData.axilas || [];
+                            if (axilasHistory.length > 0) {
+                                const elapsed = getDaysElapsed(axilasHistory[0]);
+                                if (elapsed >= 30) { shouldNotify = true; title = '🪒 Depilación Axilas'; body = `Tiempo de rebajar el vello (hace ${elapsed} días).`; }
+                            }
+                            break;
+
+                        // Lentes
+                        case 'lenses_droplets':
+                            if (data.systaneDate) {
+                                const elapsed = getDaysElapsed(data.systaneDate);
+                                if (elapsed >= 90) { shouldNotify = true; title = '👁️ Gotas de Ojos'; body = `Systane abierta hace ${elapsed} días, sugerimos cambiarla.`; }
+                            }
+                            break;
+                        case 'lenses_case':
+                            if (data.caseDate) {
+                                const elapsed = getDaysElapsed(data.caseDate);
+                                if (elapsed >= 90) { shouldNotify = true; title = '👁️ Estuche de Lentes'; body = `Estuche en uso hace ${elapsed} días, sugerimos cambiarlo.`; }
+                            }
+                            break;
+                        case 'lenses_solution':
+                            if (data.solutionDate) {
+                                const elapsed = getDaysElapsed(data.solutionDate);
+                                if (elapsed >= 90) { shouldNotify = true; title = '👁️ Solución de Lentes'; body = `Solución abierta hace ${elapsed} días, sugerimos cambiarla.`; }
+                            }
+                            break;
+                        case 'lenses_replace':
+                            if (data.lensDate) {
+                                const elapsed = getDaysElapsed(data.lensDate);
+                                if (elapsed >= 60) { shouldNotify = true; title = '👁️ Reemplazo de Lentes'; body = `Lentes en uso hace ${elapsed} días, sugerimos cambiarlos.`; }
+                            }
+                            break;
+                        case 'glasses_cloth_wash':
+                            if (data.clothWashDate) {
+                                const elapsed = getDaysElapsed(data.clothWashDate);
+                                if (elapsed >= 15) { shouldNotify = true; title = '👓 Lavado Paño Anteojos'; body = `Gamuza en uso hace ${elapsed} días, sugerimos lavarla.`; }
+                            }
+                            break;
+                        case 'glasses_cloth_replace':
+                            if (data.clothChangeDate) {
+                                const elapsed = getDaysElapsed(data.clothChangeDate);
+                                if (elapsed >= 270) { shouldNotify = true; title = '👓 Reemplazo Paño Anteojos'; body = `Gamuza en uso hace ${elapsed} días, sugerimos cambiarla.`; }
+                            }
+                            break;
+
+                        // Vehículo
+                        case 'vehicle_oil':
+                            const lastOil = maintenanceLog.find(m => m.type === 'Aceite y Filtros');
+                            if (lastOil) {
+                                const remainingKm = (lastOil.km + 10000) - currentOdo;
+                                const daysElapsed = getDaysElapsed(lastOil.date);
+                                const remainingDays = 365 - (daysElapsed || 0);
+                                if (remainingKm <= 0 || remainingDays <= 0) { shouldNotify = true; title = '🚗 Aceite y Filtros'; body = 'Mantenimiento urgente de Aceite y Filtros sugerido.'; }
+                            }
+                            break;
+                        case 'vehicle_align':
+                            const lastAlign = maintenanceLog.find(m => m.type === 'Alineación & Balanceo');
+                            if (lastAlign) {
+                                const remainingKm = (lastAlign.km + 10000) - currentOdo;
+                                if (remainingKm <= 0) { shouldNotify = true; title = '🚗 Alineación & Balanceo'; body = 'Alineación & Balanceo vencido.'; }
+                            }
+                            break;
+                        case 'vehicle_rot':
+                            const lastRot = maintenanceLog.find(m => m.type === 'Rotación de Neumáticos');
+                            if (lastRot) {
+                                const remainingKm = (lastRot.km + 10000) - currentOdo;
+                                if (remainingKm <= 0) { shouldNotify = true; title = '🚗 Rotación de Neumáticos'; body = 'Rotación de Neumáticos vencida.'; }
+                            }
+                            break;
+                        case 'vehicle_replace':
+                            const lastReplace = maintenanceLog.find(m => m.type === 'Reemplazo de Neumáticos');
+                            if (lastReplace) {
+                                const remainingKm = (lastReplace.km + 60000) - currentOdo;
+                                if (remainingKm <= 0) { shouldNotify = true; title = '🚗 Reemplazo de Neumáticos'; body = 'Cambio de Neumáticos vencido.'; }
+                            }
+                            break;
+
+                        // Nutrición & Suplementos
+                        case 'vitamina_d':
+                            const vitDHistory = gymSupplements.vit_d_history || [];
+                            if (vitDHistory.length > 0) {
+                                const lastTake = new Date(vitDHistory[0].date);
+                                const interval = gymSupplements.vit_d_days_interval || 30;
+                                const nextTake = new Date(lastTake.getTime() + interval * 24 * 60 * 60 * 1000);
+                                const remainingDays = Math.ceil((nextTake - new Date()) / 86400000);
+                                if (remainingDays <= 0) { shouldNotify = true; title = '💊 Vitamina D'; body = 'Debes tomar tu suplemento ahora.'; }
+                            }
+                            break;
+                        case 'creatine':
+                            shouldNotify = true;
+                            title = '💪 Creatina';
+                            body = '¡No te olvides de tomar la creatina de hoy!';
+                            break;
+                        case 'salmon':
+                            shouldNotify = true;
+                            title = '🐟 Salmón & Omega 3';
+                            body = 'Recordá sacar el salmón para mañana lunes para comer Omega 3.';
+                            break;
+                        case 'neck':
+                            shouldNotify = true;
+                            title = '💪 Entrenamiento de Cuello';
+                            body = 'Recordá entrenar el cuello hoy (1 vez por semana).';
+                            break;
+
+                        // Otros
+                        case 'workana':
+                            const sub = data.projectPulseSubscription;
+                            if (sub && sub.startDate && sub.cycle) {
+                                const start = new Date(sub.startDate + 'T12:00:00');
+                                const expiry = new Date(start);
+                                expiry.setMonth(expiry.getMonth() + parseInt(sub.cycle));
+                                
+                                const today = new Date();
+                                today.setHours(0,0,0,0);
+                                const expiryDay = new Date(expiry);
+                                expiryDay.setHours(0,0,0,0);
+                                const diffTime = expiryDay - today;
+                                const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+                                
+                                if (diffDays <= 7 && diffDays > 2) {
+                                    shouldNotify = true;
+                                    title = '💳 Suscripción Workana';
+                                    body = `Che, en ${diffDays} días tu suscripción va a vencer, acordate de renovarla o de hacer algo al respecto.`;
+                                } else if (diffDays <= 2) {
+                                    shouldNotify = true;
+                                    title = '💳 Suscripción Workana';
+                                    body = `Vencimiento crítico en ${diffDays} días (${expiry.toLocaleDateString('es-AR')}).`;
+                                }
+                            }
+                            break;
+                    }
+
+                    if (shouldNotify && title && body) {
+                        console.log(`[Alert Engine] Enviando push de '${title}' a usuario ${userId}`);
+                        const payload = JSON.stringify({
+                            title: title,
+                            body: body,
+                            url: '/'
+                        });
+
+                        for (const sub of userSubs) {
+                            try {
+                                await webpush.sendNotification(sub, payload);
+                            } catch (err) {
+                                console.error(`[Alert Engine] Falló enviar push de ${key}:`, err.message);
+                            }
+                        }
+
+                        if (!forceAll) {
+                            data.alerts_sent_log[key] = dateStr;
+                            dataChanged = true;
+                        }
                     }
                 }
+            }
+
+            // Guardar si hubo cambios y no es forzado
+            if (dataChanged && !forceAll) {
+                // Guardar la configuración migrada si corresponde
+                if (!data.alerts_config) {
+                    data.alerts_config = JSON.stringify(alertsConfig);
+                }
+                await supabase
+                    .from('user_data')
+                    .update({ data: data })
+                    .eq('user_id', userId);
             }
         }
     } catch (err) {
-        console.error("Error al ejecutar chequeo de recordatorios:", err);
+        console.error("Error al ejecutar el motor de alertas unificadas:", err);
     }
 }
 
@@ -579,112 +677,6 @@ async function checkAndSendRobotReminders() {
         }
     } catch(err) {
         console.error("Error en checkAndSendRobotReminders:", err);
-    }
-}
-
-// ==========================================================================
-// Tareas Dinámicas y Recordatorios Personalizados
-// ==========================================================================
-async function checkAndSendCustomReminders() {
-    if (!supabase) return;
-    try {
-        const now = new Date();
-        const argTime = new Date(now.toLocaleString("en-US", { timeZone: "America/Argentina/Buenos_Aires" }));
-        const hour = argTime.getHours();
-        const minutes = argTime.getMinutes();
-        const dayOfWeek = argTime.getDay(); // 0 = Domingo, etc.
-        const dateStr = argTime.toISOString().split('T')[0];
-
-        // Obtener usuarios y sus suscripciones
-        const { data: usersData, error: dbError } = await supabase.from('user_data').select('*');
-        const { data: subs, error: subError } = await supabase.from('push_subscriptions').select('*');
-        
-        if (dbError || subError || !usersData || !subs) return;
-        
-        // Agrupar suscripciones por user_id
-        const subsByUser = {};
-        for (const sub of subs) {
-            if (!subsByUser[sub.user_id]) subsByUser[sub.user_id] = [];
-            subsByUser[sub.user_id].push(sub.subscription);
-        }
-
-        for (const userRow of usersData) {
-            const userId = userRow.user_id;
-            const data = userRow.data || {};
-            
-            // Leer configuración de gym_supplements
-            let supplements = {};
-            if (data.gym_supplements) {
-                try {
-                    supplements = JSON.parse(data.gym_supplements);
-                } catch(e) {
-                    continue;
-                }
-            }
-            
-            const customReminders = supplements.custom_reminders;
-            if (!customReminders) continue;
-
-            const userSubs = subsByUser[userId] || [];
-            if (userSubs.length === 0) continue;
-
-            // Tipos de recordatorios dinámicos y sus textos por defecto
-            const reminderTypes = [
-                { key: 'creatine', title: '💪 Creatina', defaultBody: '¡No te olvides de tomar la creatina de hoy!' },
-                { key: 'salmon', title: '🐟 Salmón & Omega 3', defaultBody: 'Recordá sacar el salmón para mañana lunes para comer Omega 3.' },
-                { key: 'neck', title: '💪 Entrenamiento de Cuello', defaultBody: 'Recordá entrenar el cuello hoy (1 vez por semana).' }
-            ];
-
-            if (!data.custom_reminders_log) {
-                data.custom_reminders_log = {};
-            }
-
-            let dataChanged = false;
-
-            for (const rInfo of reminderTypes) {
-                const reminder = customReminders[rInfo.key];
-                if (reminder && reminder.enabled) {
-                    const days = reminder.days || [];
-                    const time = reminder.time || '';
-                    if (days.includes(dayOfWeek) && time) {
-                        const [remHour, remMin] = time.split(':').map(Number);
-                        // Tolerancia de 5 minutos porque el cron corre cada 5 minutos
-                        if (hour === remHour && minutes >= remMin && minutes < remMin + 5) {
-                            const lastSentDate = data.custom_reminders_log[rInfo.key];
-                            if (lastSentDate !== dateStr) {
-                                console.log(`[Custom Reminder] Enviando push flotante ${rInfo.key} a usuario ${userId}`);
-                                const payload = JSON.stringify({
-                                    title: rInfo.title,
-                                    body: rInfo.defaultBody,
-                                    url: '/'
-                                });
-
-                                for (const sub of userSubs) {
-                                    try {
-                                        await webpush.sendNotification(sub, payload);
-                                    } catch (err) {
-                                        console.error(`[Custom Reminder] Falló enviar push de ${rInfo.key}:`, err.message);
-                                    }
-                                }
-
-                                data.custom_reminders_log[rInfo.key] = dateStr;
-                                dataChanged = true;
-                            }
-                        }
-                    }
-                }
-            }
-
-            if (dataChanged) {
-                // Guardar actualización de log en Supabase
-                await supabase
-                    .from('user_data')
-                    .update({ data: data })
-                    .eq('user_id', userId);
-            }
-        }
-    } catch(err) {
-        console.error("Error en checkAndSendCustomReminders:", err);
     }
 }
 

@@ -1844,3 +1844,29 @@ textarea:focus {
     color: white;
 }
 
+/* Filas de formulario y espaciado */
+.form-row {
+    display: flex;
+    gap: 1rem;
+    margin-bottom: 1.25rem;
+}
+
+.form-row .input-group {
+    flex: 1;
+    min-width: 120px;
+}
+
+/* Opciones de selectores con fondo oscuro para evitar texto invisible */
+select option {
+    background-color: #0f172a;
+    color: #ffffff;
+}
+
+@media (max-width: 500px) {
+    .form-row {
+        flex-direction: column;
+        gap: 1rem;
+        margin-bottom: 1rem;
+    }
+}
+

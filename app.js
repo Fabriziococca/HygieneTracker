@@ -4167,7 +4167,8 @@ class BackupModule {
             gym_weight: localStorage.getItem('gym_weight'),
             projectPulseData: localStorage.getItem('projectPulseData'),
             projectPulseHistory: localStorage.getItem('projectPulseHistory'),
-            projectPulseSubscription: localStorage.getItem('projectPulseSubscription')
+            projectPulseSubscription: localStorage.getItem('projectPulseSubscription'),
+            alerts_config: localStorage.getItem('alerts_config')
         };
 
         const blob = new Blob([JSON.stringify(unifiedData, null, 2)], { type: "application/json" });
@@ -4302,6 +4303,14 @@ class BackupModule {
                 }
                 if (projectsFound) {
                     importedCategories.push("Proyectos (ProjectPulse)");
+                }
+
+                if (rawData.alerts_config) {
+                    const dataVal = typeof rawData.alerts_config === 'string' 
+                        ? rawData.alerts_config 
+                        : JSON.stringify(rawData.alerts_config);
+                    localStorage.setItem('alerts_config', dataVal);
+                    importedCategories.push("Configuración de Alertas");
                 }
 
                 if (importedCategories.length > 0) {
@@ -4564,7 +4573,8 @@ class AuthSyncModule {
             gym_weight: localStorage.getItem('gym_weight'),
             projectPulseData: localStorage.getItem('projectPulseData'),
             projectPulseHistory: localStorage.getItem('projectPulseHistory'),
-            projectPulseSubscription: localStorage.getItem('projectPulseSubscription')
+            projectPulseSubscription: localStorage.getItem('projectPulseSubscription'),
+            alerts_config: localStorage.getItem('alerts_config')
         };
     }
 
@@ -4699,7 +4709,7 @@ class AuthSyncModule {
             'health_medical_data', 'health_blood_tests', 'vehicle_odometer', 
             'vehicle_maintenance_log', 'gym_records', 'gym_routine', 
             'gym_routine_focus', 'gym_sessions', 'gym_meals', 
-            'gym_supplements', 'gym_weight', 'projectPulseData', 'projectPulseHistory', 'projectPulseSubscription'
+            'gym_supplements', 'gym_weight', 'projectPulseData', 'projectPulseHistory', 'projectPulseSubscription', 'alerts_config'
         ];
         localKeys.forEach(key => {
             const val = cloudData[key];
@@ -4973,6 +4983,244 @@ class AuthSyncModule {
 
 
 // ==========================================================================
+// MÓDULO 6: GESTOR DE ALERTAS CENTRALIZADO (AlertsModule)
+// ==========================================================================
+const ALERT_DEFINITIONS = [
+    // Higiene
+    { key: 'esponja_africana', name: 'Esponja Africana', category: 'higiene', type: 'interval', defaultTime: '23:00' },
+    { key: 'toalla_mano', name: 'Toalla de Mano', category: 'higiene', type: 'interval', defaultTime: '23:00' },
+    { key: 'toalla_cuerpo', name: 'Toalla de Cuerpo', category: 'higiene', type: 'interval', defaultTime: '23:00' },
+    { key: 'sabanas', name: 'Sábanas (Completas)', category: 'higiene', type: 'interval', defaultTime: '23:00' },
+    { key: 'funda_almohada', name: 'Funda de Almohada', category: 'higiene', type: 'interval', defaultTime: '23:00' },
+    { key: 'alfombra_bano', name: 'Alfombra de Baño', category: 'higiene', type: 'interval', defaultTime: '23:00' },
+    { key: 'cepillo_dientes', name: 'Cepillo de Dientes', category: 'higiene', type: 'interval', defaultTime: '23:00' },
+    { key: 'dentista', name: 'Control Dentista', category: 'higiene', type: 'interval', defaultTime: '23:00' },
+
+    // Cuidado Corporal
+    { key: 'pelo', name: 'Corte de Pelo', category: 'cuidado', type: 'interval', defaultTime: '23:00' },
+    { key: 'barba', name: 'Afeitado de Barba', category: 'cuidado', type: 'interval', defaultTime: '23:00' },
+    { key: 'axilas', name: 'Depilación Axilas', category: 'cuidado', type: 'interval', defaultTime: '23:00' },
+
+    // Lentes
+    { key: 'lenses_droplets', name: 'Gotas de Ojos (Systane)', category: 'lentes', type: 'interval', defaultTime: '23:00' },
+    { key: 'lenses_case', name: 'Estuche de Lentes', category: 'lentes', type: 'interval', defaultTime: '23:00' },
+    { key: 'lenses_solution', name: 'Solución de Lentes', category: 'lentes', type: 'interval', defaultTime: '23:00' },
+    { key: 'lenses_replace', name: 'Reemplazo de Lentes', category: 'lentes', type: 'interval', defaultTime: '23:00' },
+    { key: 'glasses_cloth_wash', name: 'Lavado Paño Anteojos', category: 'lentes', type: 'interval', defaultTime: '23:00' },
+    { key: 'glasses_cloth_replace', name: 'Reemplazo Paño Anteojos', category: 'lentes', type: 'interval', defaultTime: '23:00' },
+
+    // Vehículo
+    { key: 'vehicle_oil', name: 'Aceite y Filtros', category: 'vehiculo', type: 'interval', defaultTime: '23:00' },
+    { key: 'vehicle_align', name: 'Alineación & Balanceo', category: 'vehiculo', type: 'interval', defaultTime: '23:00' },
+    { key: 'vehicle_rot', name: 'Rotación de Neumáticos', category: 'vehiculo', type: 'interval', defaultTime: '23:00' },
+    { key: 'vehicle_replace', name: 'Reemplazo de Neumáticos', category: 'vehiculo', type: 'interval', defaultTime: '23:00' },
+
+    // Nutrición & Hábitos
+    { key: 'vitamina_d', name: 'Vitamina D', category: 'gym', type: 'interval', defaultTime: '23:00' },
+    { key: 'creatine', name: 'Creatina', category: 'gym', type: 'recurring', defaultTime: '23:00', defaultDays: [1,2,3,4,5,6,0] },
+    { key: 'salmon', name: 'Salmón & Omega 3', category: 'gym', type: 'recurring', defaultTime: '17:00', defaultDays: [0] },
+    { key: 'neck', name: 'Entrenamiento de Cuello', category: 'gym', type: 'recurring', defaultTime: '23:30', defaultDays: [5,6] },
+
+    // Otros
+    { key: 'robot', name: 'Robot Aspiradora', category: 'otros', type: 'interval', defaultTime: '23:00' },
+    { key: 'workana', name: 'Vencimiento Workana', category: 'otros', type: 'interval', defaultTime: '23:00' }
+];
+
+const CATEGORY_NAMES = {
+    higiene: '💧 Higiene y Baño',
+    cuidado: '✂️ Cuidado Corporal',
+    lentes: '👁️ Lentes & Anteojos',
+    vehiculo: '🚗 Vehículo',
+    gym: '💪 Nutrición & Hábitos',
+    otros: '⚙️ Otros Avisos'
+};
+
+class AlertsModule {
+    constructor(appController) {
+        this.app = appController;
+        this.configs = {};
+        window.alertsManager = this;
+        this.loadData();
+    }
+
+    loadData() {
+        try {
+            const defaultConfigs = {};
+            ALERT_DEFINITIONS.forEach(def => {
+                defaultConfigs[def.key] = {
+                    enabled: true,
+                    time: def.defaultTime,
+                    days: def.defaultDays || []
+                };
+            });
+
+            const localVal = localStorage.getItem('alerts_config');
+            if (localVal) {
+                this.configs = { ...defaultConfigs, ...JSON.parse(localVal) };
+            } else {
+                // Intentar migrar configuraciones viejas de recordatorios personalizados de gimnasio
+                const oldGym = localStorage.getItem('gym_supplements');
+                if (oldGym) {
+                    try {
+                        const parsedGym = JSON.parse(oldGym);
+                        const oldReminders = parsedGym.custom_reminders;
+                        if (oldReminders) {
+                            ['creatine', 'salmon', 'neck'].forEach(key => {
+                                if (oldReminders[key]) {
+                                    defaultConfigs[key] = {
+                                        enabled: oldReminders[key].enabled ?? true,
+                                        time: oldReminders[key].time || defaultConfigs[key].time,
+                                        days: oldReminders[key].days || defaultConfigs[key].days
+                                    };
+                                }
+                            });
+                        }
+                    } catch(e) {}
+                }
+                this.configs = defaultConfigs;
+                this.saveData();
+            }
+        } catch (err) {
+            console.error('Error al cargar configuraciones de alertas:', err);
+        }
+    }
+
+    saveData() {
+        localStorage.setItem('alerts_config', JSON.stringify(this.configs));
+    }
+
+    setupListeners() {
+        const container = document.getElementById('alerts-categories-container');
+        if (!container) return;
+
+        // Limpiar escuchadores duplicados delegando eventos
+        container.onclick = (e) => {
+            const dayBtn = e.target.closest('.day-btn[data-day]');
+            if (dayBtn) {
+                dayBtn.classList.toggle('active');
+            }
+        };
+
+        const saveBtn = document.getElementById('btn-save-all-alerts');
+        if (saveBtn) {
+            saveBtn.onclick = async () => {
+                this.saveFromUI();
+            };
+        }
+    }
+
+    saveFromUI() {
+        const rows = document.querySelectorAll('.alert-config-row[data-alert-key]');
+        const newConfigs = {};
+
+        rows.forEach(row => {
+            const key = row.dataset.alertKey;
+            const enabledInput = row.querySelector('.alert-enabled-check');
+            const timeInput = row.querySelector('.alert-time-input');
+            const dayBtns = row.querySelectorAll('.day-btn.active');
+
+            const days = Array.from(dayBtns).map(btn => parseInt(btn.dataset.day));
+
+            newConfigs[key] = {
+                enabled: enabledInput ? enabledInput.checked : false,
+                time: timeInput ? timeInput.value : '23:00',
+                days: days
+            };
+        });
+
+        this.configs = newConfigs;
+        this.saveData();
+        
+        if (navigator.vibrate) navigator.vibrate(50);
+        
+        if (this.app.auth) {
+            this.app.auth.syncToCloud(true).catch(() => {});
+        } else {
+            alert('¡Configuraciones guardadas localmente!');
+        }
+
+        // Renderizar nuevamente para refrescar visuales
+        this.render();
+    }
+
+    render() {
+        const container = document.getElementById('alerts-categories-container');
+        if (!container) return;
+
+        container.innerHTML = '';
+
+        // Agrupar por categoría
+        const grouped = {};
+        Object.keys(CATEGORY_NAMES).forEach(cat => {
+            grouped[cat] = ALERT_DEFINITIONS.filter(def => def.category === cat);
+        });
+
+        Object.keys(grouped).forEach(cat => {
+            const list = grouped[cat];
+            if (list.length === 0) return;
+
+            const card = document.createElement('div');
+            card.className = 'card';
+            card.style.margin = '0';
+            card.style.background = 'rgba(15, 23, 42, 0.4)';
+            card.style.borderColor = 'rgba(255, 255, 255, 0.05)';
+
+            let bodyHtml = `
+                <div style="font-size: 1rem; font-weight: bold; color: var(--primary-color); margin-bottom: 1.25rem; border-bottom: 1px solid rgba(255,255,255,0.05); padding-bottom: 8px;">
+                    ${CATEGORY_NAMES[cat]}
+                </div>
+                <div style="display: flex; flex-direction: column; gap: 1.5rem;">
+            `;
+
+            list.forEach(def => {
+                const conf = this.configs[def.key] || { enabled: true, time: def.defaultTime, days: def.defaultDays || [] };
+                const isRecurring = def.type === 'recurring';
+
+                bodyHtml += `
+                    <div class="alert-config-row" data-alert-key="${def.key}" style="border-bottom: 1px solid rgba(255, 255, 255, 0.03); padding-bottom: 1.25rem;">
+                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.75rem;">
+                            <span style="font-size: 0.95rem; font-weight: 500; color: white;">${def.name}</span>
+                            <label class="switch-container" style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
+                                <input type="checkbox" class="alert-enabled-check" style="width: 18px; height: 18px; accent-color: var(--primary-color);" ${conf.enabled ? 'checked' : ''}>
+                                <span style="font-size: 0.8rem; color: var(--text-secondary);">Recibir push</span>
+                            </label>
+                        </div>
+                        <div style="display: flex; align-items: center; gap: 1.5rem; flex-wrap: wrap;">
+                            <div style="display: flex; align-items: center; gap: 8px;">
+                                <label style="font-size: 0.8rem; color: var(--text-secondary);">Notificar a las:</label>
+                                <input type="time" class="alert-time-input" value="${conf.time}" style="width: 100px; padding: 4px 8px; border-radius: 4px; border: 1px solid var(--surface-border); background: rgba(0,0,0,0.2); color: white;">
+                            </div>
+                            ${isRecurring ? `
+                            <div style="display: flex; flex-direction: column; gap: 6px;">
+                                <span style="font-size: 0.8rem; color: var(--text-secondary);">Días de notificación:</span>
+                                <div class="day-selectors" style="display: flex; gap: 4px;">
+                                    <button class="day-btn ${conf.days.includes(1) ? 'active' : ''}" data-day="1" style="min-width: 32px; padding: 4px 0;">L</button>
+                                    <button class="day-btn ${conf.days.includes(2) ? 'active' : ''}" data-day="2" style="min-width: 32px; padding: 4px 0;">M</button>
+                                    <button class="day-btn ${conf.days.includes(3) ? 'active' : ''}" data-day="3" style="min-width: 32px; padding: 4px 0;">M</button>
+                                    <button class="day-btn ${conf.days.includes(4) ? 'active' : ''}" data-day="4" style="min-width: 32px; padding: 4px 0;">J</button>
+                                    <button class="day-btn ${conf.days.includes(5) ? 'active' : ''}" data-day="5" style="min-width: 32px; padding: 4px 0;">V</button>
+                                    <button class="day-btn ${conf.days.includes(6) ? 'active' : ''}" data-day="6" style="min-width: 32px; padding: 4px 0;">S</button>
+                                    <button class="day-btn ${conf.days.includes(0) ? 'active' : ''}" data-day="0" style="min-width: 32px; padding: 4px 0;">D</button>
+                                </div>
+                            </div>
+                            ` : ''}
+                        </div>
+                    </div>
+                `;
+            });
+
+            bodyHtml += `</div>`;
+            card.innerHTML = bodyHtml;
+            container.appendChild(card);
+        });
+
+        // Configurar los escuchadores después de renderizar
+        this.setupListeners();
+    }
+}
+
+
+// ==========================================================================
 // CONTROLADOR CENTRAL: APP CONTROLLER
 // ==========================================================================
 class AppController {
@@ -5027,6 +5275,8 @@ class AppController {
                 this.gym.render();
             } else if (activeSectionId === 'projects-section') {
                 this.projects.render();
+            } else if (activeSectionId === 'alerts-section') {
+                this.alerts.render();
             }
         });
     }
@@ -5187,6 +5437,7 @@ class AppController {
         this.projects = new ProjectsModule(this);
         this.backups = new BackupModule(this);
         this.auth = new AuthSyncModule(this);
+        this.alerts = new AlertsModule(this);
         
         setInterval(() => {
             const activeSection = document.querySelector('.main-section:not(.hidden)');
