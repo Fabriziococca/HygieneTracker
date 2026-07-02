@@ -4628,16 +4628,27 @@ class AuthSyncModule {
                 // Cloud data exists! Compare normalized differences
                 const local = this.gatherLocalData();
                 let hasDifference = false;
+                let hasLocalOnlyData = false;
                 Object.keys(local).forEach(key => {
                     const cloudVal = cloudData[key] === undefined ? null : cloudData[key];
                     const localVal = local[key] === undefined ? null : local[key];
                     if (!this.areValuesEqual(cloudVal, localVal)) {
                         hasDifference = true;
+                        if ((cloudVal === null || cloudVal === undefined) && (localVal !== null && localVal !== undefined)) {
+                            hasLocalOnlyData = true;
+                        }
                     }
                 });
 
                 if (!hasDifference) {
                     this.updateSyncBadge('synced', "Sincronizado");
+                    return;
+                }
+
+                // Si hay diferencias pero son datos locales nuevos (que no existen en la nube), los subimos
+                if (hasLocalOnlyData && sessionStorage.getItem('is_explicit_login') !== 'true') {
+                    console.log("Local has new data not present in cloud. Uploading...");
+                    await this.syncToCloud(false);
                     return;
                 }
 

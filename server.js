@@ -317,9 +317,11 @@ async function checkAndSendAllAlerts(forceAll = false) {
                 const conf = alertsConfig[key];
                 if (!conf || !conf.enabled) continue;
 
-                // Verificar coincidencia de horario (con tolerancia de 5 minutos)
+                // Verificar coincidencia de horario (si es igual o posterior en el día de hoy)
                 const [remHour, remMin] = (conf.time || '23:00').split(':').map(Number);
-                const isTimeMatch = hour === remHour && minutes >= remMin && minutes < remMin + 5;
+                const currentMinutes = hour * 60 + minutes;
+                const scheduledMinutes = remHour * 60 + remMin;
+                const isTimeMatch = currentMinutes >= scheduledMinutes;
 
                 if (forceAll || isTimeMatch) {
                     // Verificar si ya fue enviada hoy para evitar spam en el mismo día
@@ -566,11 +568,13 @@ async function checkAndSendAllAlerts(forceAll = false) {
             }
 
             // Guardar si hubo cambios y no es forzado
-            if (dataChanged && !forceAll) {
-                // Guardar la configuración migrada si corresponde
-                if (!data.alerts_config) {
-                    data.alerts_config = JSON.stringify(alertsConfig);
-                }
+            let shouldSaveConfig = false;
+            if (!data.alerts_config) {
+                data.alerts_config = JSON.stringify(alertsConfig);
+                shouldSaveConfig = true;
+            }
+
+            if ((dataChanged || shouldSaveConfig) && !forceAll) {
                 await supabase
                     .from('user_data')
                     .update({ data: data })
